@@ -88,8 +88,11 @@ class YAFFSSpare(YAFFS):
         self.data = data
         self.endianess = endianess
 
-        # These *should* be common to both YAFFS1 and YAFFS2,
-        # and the object ID is of most importance here.
+        # Some YAFFS images seem to have an extra 2 bytes before the chunk/obj IDs?
+        # Always 0xFFFF.
+        if self.read_short() == 0xFFFF:
+            junk = self.read_next(2)
+
         self.chunk_id = self.read_next(4)
         self.obj_id = self.read_next(4)
 
@@ -299,6 +302,7 @@ if __name__ == "__main__":
 
     fs = YAFFSExtractor(in_file, page_size=page_size, spare_size=spare_size)
     obj_count = fs.parse()
+    sys.stdout.write("Parsed %d objects\n" % obj_count)
     (dc, fc, sc) = fs.extract(out_dir)
     sys.stdout.write("Created %d directories, %d files, and %d symlinks.\n" % (dc, fc, sc))
 
