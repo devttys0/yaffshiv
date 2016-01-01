@@ -95,8 +95,8 @@ class YAFFSSpare(YAFFS):
         self.config = config
 
         # YAFFS images built without --yaffs-ecclayout have an extra two
-        # bytes before the chunk ID. Always 0xFFFF (?).
-        if self.config.ecclayout or (self.config.auto_detect and self.read_short() == 0xFFFF):
+        # bytes before the chunk ID. Possibly an unused CRC? Always 0xFFFF (?).
+        if not self.config.ecclayout or (self.config.auto_detect and self.read_short() == 0xFFFF):
             junk = self.read_next(2)
 
         self.chunk_id = self.read_next(4)
@@ -205,8 +205,6 @@ class YAFFSExtractor(YAFFS):
         self.config = config
 
     def parse(self):
-        count = 0
-
         with YAFFSParser(self.data, self.config) as parser:
             for entry in parser.next_entry():
                 if self.file_paths.has_key(entry.parent_obj_id):
@@ -217,12 +215,10 @@ class YAFFSExtractor(YAFFS):
                 self.file_paths[entry.yaffs_obj_id] = path
                 self.file_entries[entry.yaffs_obj_id] = entry
 
-                count += 1
-
                 if self.config.debug:
                     self._print_entry(entry)
 
-        return count
+        return len(self.file_entries)
 
     def _print_entry(self, entry):
         sys.stdout.write("###################################################\n")
@@ -235,7 +231,7 @@ class YAFFSExtractor(YAFFS):
         else:
             sys.stdout.write("\n")
         sys.stdout.write("File size: 0x%X\n" % entry.file_size)
-        sys.stdout.write("File mode: 0x%X\n" % entry.yst_mode)
+        sys.stdout.write("File mode: %d\n" % entry.yst_mode)
         sys.stdout.write("File UID: %d\n" % entry.yst_uid)
         sys.stdout.write("File GID: %d\n" % entry.yst_gid)
         #sys.stdout.write("First bytes: %s\n" % entry.file_data[0:16])
@@ -246,16 +242,16 @@ class YAFFSExtractor(YAFFS):
         for (entry_id, entry) in self.file_entries.iteritems():
             self._print_entry(entry)
 
+    def set_mode_owner(self, file_path, entry):
+        if self.config.preserve_mode:
+            os.chmod(file_path, entry.yst_mode)
+        if self.config.preserve_owner:
+            os.chown(file_path, entry.yst_uid, entry.yst_gid)
+
     def extract(self, outdir):
         dir_count = 0
         file_count = 0
         symlink_count = 0
-
-        try:
-            os.makedirs(outdir)
-        except Exception as e:
-            sys.stderr.write("Failed to create output directory: %s\n" % str(e))
-            return (-1, -1, -1)
 
         # Create directories
         for (entry_id, file_path) in self.file_paths.iteritems():
@@ -264,6 +260,7 @@ class YAFFSExtractor(YAFFS):
                 try:
                     file_path = os.path.join(outdir, file_path)
                     os.makedirs(file_path)
+                    self.set_mode_owner(file_path, entry)
                     dir_count += 1
                 except Exception as e:
                     sys.stderr.write("WARNING: Failed to create directory '%s': %s\n" % (file_path, str(e)))
@@ -277,6 +274,7 @@ class YAFFSExtractor(YAFFS):
                     try:
                         with open(file_path, 'wb') as fp:
                             fp.write(self.file_entries[entry_id].file_data)
+                        self.set_mode_owner(file_path, entry)
                         file_count += 1
                     except Exception as e:
                         sys.stderr.write("WARNING: Failed to create file '%s': %s\n" % (file_path, str(e)))
@@ -289,6 +287,7 @@ class YAFFSExtractor(YAFFS):
                 src = entry.alias
                 try:
                     os.symlink(src, dst)
+                    self.set_mode_owner(dst, entry)
                     symlink_count += 1
                 except Exception as e:
                     sys.stderr.write("WARNING: Failed to create symlink '%s' -> '%s': %s\n" % (dst, src, str(e)))
@@ -313,11 +312,19 @@ if __name__ == "__main__":
         sys.stderr.write("Failed to open file '%s': %s\n" % (in_file, str(e)))
         sys.exit(1)
 
+    try:
+        os.makedirs(out_dir)
+    except Exception as e:
+        sys.stderr.write("Failed to create output directory: %s\n" % str(e))
+        sys.exit(1)
+
     config = YAFFSConfig(endianess=YAFFS.LITTLE_ENDIAN,
                          page_size=page_size,
                          spare_size=spare_size,
                          ecclayout=True,
-                         audo_detect=True,
+                         auto_detect=True,
+                         preserve_mode=True,
+                         preserve_owner=False,
                          debug=True)
 
 
@@ -326,6 +333,6 @@ if __name__ == "__main__":
     obj_count = fs.parse()
     sys.stdout.write("Parsed %d objects\n" % obj_count)
 
-    #(dc, fc, sc) = fs.extract(out_dir)
-    #sys.stdout.write("Created %d directories, %d files, and %d symlinks.\n" % (dc, fc, sc))
+    (dc, fc, sc) = fs.extract(out_dir)
+    sys.stdout.write("Created %d directories, %d files, and %d symlinks.\n" % (dc, fc, sc))
 
