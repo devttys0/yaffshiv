@@ -4,13 +4,46 @@ import os
 import sys
 import struct
 
+class Compat(object):
+    '''
+    Python2/3 compatability methods.
+    '''
+
+    @staticmethod
+    def str2bytes(s):
+        if isinstance(s, str):
+            return s.encode('latin-1')
+        else:
+            return s
+
+    @staticmethod
+    def iterator(d):
+        if sys.version_info[0] > 2:
+            return d.items()
+        else:
+            return d.iteritems()
+
+    @staticmethod
+    def has_key(d, k):
+        if sys.version_info[0] > 2:
+            return k in d
+        else:
+            return d.has_key(k)
+
 class YAFFSConfig(object):
+    '''
+    Container class for storing global configuration data.
+    '''
 
     def __init__(self, **kwargs):
-        for (k, v) in kwargs.iteritems():
+        for (k, v) in Compat.iterator(kwargs):
             setattr(self, k, v)
 
 class YAFFS(object):
+    '''
+    Main YAFFS class; all other YAFFS classes are subclassed from this.
+    '''
+
     BIG_ENDIAN = ">"
     LITTLE_ENDIAN = "<"
 
@@ -63,6 +96,9 @@ class YAFFS(object):
         return string[0:i]
 
 class YAFFSObjType(YAFFS):
+    '''
+    YAFFS object type container. The object type is just a 4 byte identifier.
+    '''
 
     TYPE2STR = {
                 YAFFS.YAFFS_OBJECT_TYPE_UNKNOWN   : "YAFFS_OBJECT_TYPE_UNKNOWN",
@@ -89,6 +125,10 @@ class YAFFSObjType(YAFFS):
         return self._type
 
 class YAFFSSpare(YAFFS):
+    '''
+    Parses and stores relevant data from YAFFS spare data sections.
+    Primarily important for retrieving each file object's ID.
+    '''
 
     def __init__(self, data, config):
         self.data = data
@@ -103,6 +143,9 @@ class YAFFSSpare(YAFFS):
         self.obj_id = self.read_next(4)
 
 class YAFFSEntry(YAFFS):
+    '''
+    Parses and stores information from each YAFFS object entry data structure.
+    '''
 
     def __init__(self, data, spare, config):
         self.data = data
@@ -163,6 +206,10 @@ class YAFFSEntry(YAFFS):
         self.yaffs_obj_id = self.spare.obj_id
 
 class YAFFSParser(YAFFS):
+    '''
+    Main YAFFS file system parser. Primary method is self.next_entry, which yields
+    the next object entry in the file system.
+    '''
 
     def __init__(self, data, config):
         self.data = data
@@ -197,6 +244,9 @@ class YAFFSParser(YAFFS):
             yield obj_hdr
 
 class YAFFSExtractor(YAFFS):
+    '''
+    Class for extracting information and data from a YAFFS file system.
+    '''
 
     def __init__(self, data, config):
         self.file_paths = {}
@@ -207,7 +257,7 @@ class YAFFSExtractor(YAFFS):
     def parse(self):
         with YAFFSParser(self.data, self.config) as parser:
             for entry in parser.next_entry():
-                if self.file_paths.has_key(entry.parent_obj_id):
+                if Compat.has_key(self.file_paths, entry.parent_obj_id):
                     path = os.path.join(self.file_paths[entry.parent_obj_id], entry.name)
                 else:
                     path = entry.name
@@ -241,7 +291,7 @@ class YAFFSExtractor(YAFFS):
 
 
     def ls(self):
-        for (entry_id, entry) in self.file_entries.iteritems():
+        for (entry_id, entry) in Compat.iterator(self.file_entries):
             self._print_entry(entry)
 
     def set_mode_owner(self, file_path, entry):
@@ -255,8 +305,11 @@ class YAFFSExtractor(YAFFS):
         file_count = 0
         link_count = 0
 
+        # Make it a bytes array for Python3
+        outdir = Compat.str2bytes(outdir)
+
         # Create directories
-        for (entry_id, file_path) in self.file_paths.iteritems():
+        for (entry_id, file_path) in Compat.iterator(self.file_paths):
             entry = self.file_entries[entry_id]
             if file_path and int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_DIRECTORY:
                 try:
@@ -268,7 +321,7 @@ class YAFFSExtractor(YAFFS):
                     sys.stderr.write("WARNING: Failed to create directory '%s': %s\n" % (file_path, str(e)))
 
         # Create files
-        for (entry_id, file_path) in self.file_paths.iteritems():
+        for (entry_id, file_path) in Compat.iterator(self.file_paths):
             if file_path:
                 file_path = os.path.join(outdir, file_path)
                 entry = self.file_entries[entry_id]
@@ -288,8 +341,8 @@ class YAFFSExtractor(YAFFS):
                         sys.stderr.write("Failed to create special device file '%s': %s\n" % (file_path, str(e)))
 
 
-        # Create symlinks
-        for (entry_id, file_path) in self.file_paths.iteritems():
+        # Create hard/sym links
+        for (entry_id, file_path) in Compat.iterator(self.file_paths):
             entry = self.file_entries[entry_id]
 
             if file_path:
