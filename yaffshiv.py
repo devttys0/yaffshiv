@@ -47,7 +47,7 @@ class YAFFSConfig(object):
         self.ecclayout = True
         self.preserve_mode = True
         self.preserve_owner = False
-        self.debug = True
+        self.debug = False
 
         for (k, v) in Compat.iterator(kwargs):
             setattr(self, k, v)
@@ -439,6 +439,8 @@ class YAFFSExtractor(YAFFS):
 
 if __name__ == "__main__":
 
+    from getopt import GetoptError, getopt as GetOpt
+
     page_size = None
     spare_size = None
     endianess = None
@@ -447,13 +449,42 @@ if __name__ == "__main__":
     preserve_owner = None
     debug = None
     auto_detect = None
+    in_file = None
+    out_dir = None
 
     try:
-        in_file = sys.argv[1]
-        out_dir = sys.argv[2]
-        auto_detect = True
-    except Exception as e:
-        sys.stdout.write("Usage: %s <yaffs image> <output directory>\n" % sys.argv[0])
+        (opts, args) = GetOpt(sys.argv[1:], b"f:d:p:s:e:c:oa", [b"file=",
+                                                               b"dir=",
+                                                               b"page-size=",
+                                                               b"spare-size=",
+                                                               b"endianess=",
+                                                               b"no-ecc",
+                                                               b"ownership",
+                                                               b"auto"])
+    except GetoptError as e:
+        sys.stderr.write(str(e) + "\n")
+        sys.stderr.write("\nUsage: %s [OPTIONS]\n\n" % sys.argv[0])
+        sys.stderr.write("    -f, --file=<yaffs image>        YAFFS input file *\n")
+        sys.stderr.write("    -d, --dir=<output directory>    Extract YAFFS files to this directory *\n")
+        sys.stderr.write("    -p, --page-size=<int>           YAFFS page size [default: 2048]\n")
+        sys.stderr.write("    -s, --spare-size=<int>          YAFFS spare size [default: 64]\n")
+        sys.stderr.write("    -e, --endianess=<big|little>    Set input file endianess [default: little]\n")
+        sys.stderr.write("    -n, --no-ecc                    Use Linux MTD scheme instead of YAFFS oob scheme[default: YAFFS oob]\n")
+        sys.stderr.write("    -a, --auto                      Attempt to auto detect page size, spare size, ECC, and endianess settings [default: False]\n")
+        sys.stderr.write("    -o, --ownership                 Preserve original ownership of extracted files [default: False]\n\n")
+        sys.stderr.write("* = Required argument\n\n")
+        sys.exit(1)
+
+    for (opt, arg) in opts:
+        if opt in [b"-f", b"--file"]:
+            in_file = arg
+        elif opt in [b"-d", b"--dir"]:
+            out_dir = arg
+        elif opt in [b"-a", b"--auto"]:
+            auto_detect = True
+
+    if not in_file or not out_dir:
+        sys.stderr.write("Error: You must specify an input file and an output directory!\n")
         sys.exit(1)
 
     try:
