@@ -35,9 +35,81 @@ class YAFFSConfig(object):
     Container class for storing global configuration data.
     '''
 
+    SPARE_START_BIG_ENDIAN_ECC = b"\x00\x00\x10\x00"
+    SPARE_START_BIG_ENDIAN_NO_ECC = b"\xFF\xFF\x00\x00\x10\x00"
+    SPARE_START_LITTLE_ENDIAN_ECC = b"\x00\x10\x00\x00"
+    SPARE_START_LITTLE_ENDIAN_NO_ECC = b"\xFF\xFF\x00\x10\x00\x00"
+
     def __init__(self, **kwargs):
+        self.endianess = YAFFS.LITTLE_ENDIAN
+        self.page_size = YAFFS.DEFAULT_PAGE_SIZE
+        self.spare_size = YAFFS.DEFAULT_SPARE_SIZE
+        self.ecclayout = True
+        self.preserve_mode = True
+        self.preserve_owner = False
+        self.debug = True
+
         for (k, v) in Compat.iterator(kwargs):
             setattr(self, k, v)
+
+        if hasattr(self, 'auto') and hasattr(self, 'sample_data'):
+            self._auto_detect_settings()
+            if self.debug:
+                sys.stdout.write("Page size: %d\n" % self.page_size)
+                sys.stdout.write("Spare size: %d\n" % self.spare_size)
+                sys.stdout.write("ECC layout: %s\n" % self.ecclayout)
+                sys.stdout.write("Endianess: %s\n" % self.endianess)
+
+    def _auto_detect_settings(self):
+        valid_page_sizes = [512, 1024, 2048, 4096, 8192, 16384, -1]
+        valid_spare_sizes = []
+
+        for page_size in valid_page_sizes:
+            if page_size != -1:
+                valid_spare_sizes.append(page_size / 32)
+
+        # Spare data should start at the end of the page; if we can identify it,
+        # then we know the page size used.
+        for page_size in valid_page_sizes:
+            if page_size == -1:
+                raise Exception("Auto-detection failed: Could not locate start of spare data section.")
+
+            if self.sample_data[page_size:].startswith(self.SPARE_START_LITTLE_ENDIAN_ECC):
+                self.page_size = page_size
+                self.ecclayout = True
+                self.endianess = YAFFS.LITTLE_ENDIAN
+                break
+            elif self.sample_data[page_size:].startswith(self.SPARE_START_LITTLE_ENDIAN_NO_ECC):
+                self.page_size = page_size
+                self.ecclayout = False
+                self.endianess = YAFFS.LITTLE_ENDIAN
+                break
+            elif self.sample_data[page_size:].startswith(self.SPARE_START_BIG_ENDIAN_ECC):
+                self.page_size = page_size
+                self.ecclayout = True
+                self.endianess = YAFFS.BIG_ENDIAN
+                break
+            elif self.sample_data[page_size:].startswith(self.SPARE_START_BIG_ENDIAN_NO_ECC):
+                self.page_size = page_size
+                self.ecclayout = False
+                self.endianess = YAFFS.BIG_ENDIAN
+                break
+
+        try:
+            if not self.ecclayout:
+                offset = 6
+            else:
+                offset = 4
+
+            spare_sig = self.sample_data[self.page_size+offset:self.page_size+offset+4] + b"\xFF\xFF"
+
+            self.spare_size = self.sample_data[self.page_size:].index(spare_sig) - 4
+        except Exception as e:
+            raise Exception("Auto-detection failed: Could not locate end of spare data section.")
+
+        # Sanity check
+        if self.spare_size not in valid_spare_sizes:
+            raise Exception("Auto-detection failed: Detected an unlikely spare size: %d" % self.spare_size)
 
 class YAFFS(object):
     '''
@@ -48,7 +120,7 @@ class YAFFS(object):
     LITTLE_ENDIAN = "<"
 
     # These assume non-unicode YAFFS name lengths
-    YAFFS_MAX_NAME_LENGTH       = 255 - 2 # NOTE: This is from observation; YAFFS code says 255.
+    YAFFS_MAX_NAME_LENGTH       = 255 - 2 # NOTE: This is from observation; YAFFS code #define says 255.
     YAFFS_MAX_ALIAS_LENGTH      = 159
 
     YAFFS_OBJECT_TYPE_UNKNOWN   = 0
@@ -58,8 +130,8 @@ class YAFFS(object):
     YAFFS_OBJECT_TYPE_HARDLINK  = 4
     YAFFS_OBJECT_TYPE_SPECIAL   = 5
 
-    DEFAULT_PAGE_SIZE           = 0x1000
-    DEFAULT_SPARE_SIZE          = 0x10
+    DEFAULT_PAGE_SIZE           = 2048
+    DEFAULT_SPARE_SIZE          = 64
 
     data = b''
     offset = 0
@@ -135,8 +207,8 @@ class YAFFSSpare(YAFFS):
         self.config = config
 
         # YAFFS images built without --yaffs-ecclayout have an extra two
-        # bytes before the chunk ID. Possibly an unused CRC? Always 0xFFFF (?).
-        if not self.config.ecclayout or (self.config.auto_detect and self.read_short() == 0xFFFF):
+        # bytes before the chunk ID. Possibly an unused CRC?
+        if not self.config.ecclayout:
             junk = self.read_next(2)
 
         self.chunk_id = self.read_next(4)
@@ -367,11 +439,19 @@ class YAFFSExtractor(YAFFS):
 
 if __name__ == "__main__":
 
+    page_size = None
+    spare_size = None
+    endianess = None
+    ecclayout = None
+    preserve_mode = None
+    preserve_owner = None
+    debug = None
+    auto_detect = None
+
     try:
-        page_size = int(sys.argv[1])
-        spare_size = int(sys.argv[2])
-        in_file = sys.argv[3]
-        out_dir = sys.argv[4]
+        in_file = sys.argv[1]
+        out_dir = sys.argv[2]
+        auto_detect = True
     except Exception as e:
         sys.stdout.write("Usage: %s <page_size> <spare_size> <yaffs image> <output directory>\n" % sys.argv[0])
         sys.exit(1)
@@ -389,15 +469,27 @@ if __name__ == "__main__":
         sys.stderr.write("Failed to create output directory: %s\n" % str(e))
         sys.exit(1)
 
-    config = YAFFSConfig(endianess=YAFFS.LITTLE_ENDIAN,
-                         page_size=page_size,
-                         spare_size=spare_size,
-                         ecclayout=True,
-                         auto_detect=True,
-                         preserve_mode=True,
-                         preserve_owner=False,
-                         debug=True)
+    # Either auto-detect configuration settings, or use hard-coded defaults
+    if auto_detect:
+        config = YAFFSConfig(auto=True, sample_data=data[0:10240])
+    else:
+        config = YAFFSConfig()
 
+    # Manual settings override default / auto-detected settings
+    if spare_size is not None:
+        config.spare_size = spare_size
+    if page_size is not None:
+        config.page_size = page_size
+    if endianess is not None:
+        config.endianess = endianess
+    if ecclayout is not None:
+        config.ecclayout = ecclayout
+    if preserve_mode is not None:
+        config.preserve_mode = preserve_mode
+    if preserve_owner is not None:
+        config.preserve_owner = preserve_owner
+    if debug is not None:
+        config.debug = debug
 
     fs = YAFFSExtractor(data, config)
     sys.stdout.write("Parsing YAFFS objects...\n")
