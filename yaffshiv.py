@@ -220,25 +220,31 @@ class YAFFSExtractor(YAFFS):
                 count += 1
 
                 if self.config.debug:
-                    sys.stdout.write("###################################################\n")
-                    sys.stdout.write("File ID: %d\n" % entry.yaffs_obj_id)
-                    sys.stdout.write("File type: %s\n" % str(entry.yaffs_obj_type))
-                    sys.stdout.write("File parent ID: %d\n" % entry.parent_obj_id)
-                    sys.stdout.write("File name: %s\n" % entry.name)
-                    sys.stdout.write("File path: %s" % self.file_paths[entry.yaffs_obj_id])
-                    if int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_SYMLINK:
-                        sys.stdout.write(" -> %s\n" % entry.alias)
-                    else:
-                        sys.stdout.write("\n")
-                    sys.stdout.write("File size: 0x%X\n" % entry.file_size)
-                    sys.stdout.write("File mode: %d\n" % entry.yst_mode)
-                    sys.stdout.write("File UID: %d\n" % entry.yst_uid)
-                    sys.stdout.write("File GID: %d\n" % entry.yst_gid)
-                    sys.stdout.write("First bytes: %s\n" % entry.file_data[0:16])
+                    self._print_entry(entry)
 
-        if self.config.debug:
-            sys.stdout.write("###################################################\n\n")
         return count
+
+    def _print_entry(self, entry):
+        sys.stdout.write("###################################################\n")
+        sys.stdout.write("File type: %s\n" % str(entry.yaffs_obj_type))
+        sys.stdout.write("File ID: %d\n" % entry.yaffs_obj_id)
+        sys.stdout.write("File parent ID: %d\n" % entry.parent_obj_id)
+        sys.stdout.write("File name: %s" % self.file_paths[entry.yaffs_obj_id])
+        if int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_SYMLINK:
+            sys.stdout.write(" -> %s\n" % entry.alias)
+        else:
+            sys.stdout.write("\n")
+        sys.stdout.write("File size: 0x%X\n" % entry.file_size)
+        sys.stdout.write("File mode: 0x%X\n" % entry.yst_mode)
+        sys.stdout.write("File UID: %d\n" % entry.yst_uid)
+        sys.stdout.write("File GID: %d\n" % entry.yst_gid)
+        #sys.stdout.write("First bytes: %s\n" % entry.file_data[0:16])
+        sys.stdout.write("###################################################\n\n")
+
+
+    def ls(self):
+        for (entry_id, entry) in self.file_entries.iteritems():
+            self._print_entry(entry)
 
     def extract(self, outdir):
         dir_count = 0
@@ -312,7 +318,7 @@ if __name__ == "__main__":
                          spare_size=spare_size,
                          ecclayout=True,
                          audo_detect=True,
-                         debug=False)
+                         debug=True)
 
 
     fs = YAFFSExtractor(data, config)
