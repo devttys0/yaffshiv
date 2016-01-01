@@ -287,7 +287,6 @@ class YAFFSExtractor(YAFFS):
                 src = entry.alias
                 try:
                     os.symlink(src, dst)
-                    self.set_mode_owner(dst, entry)
                     symlink_count += 1
                 except Exception as e:
                     sys.stderr.write("WARNING: Failed to create symlink '%s' -> '%s': %s\n" % (dst, src, str(e)))
