@@ -229,7 +229,7 @@ class YAFFSExtractor(YAFFS):
         if int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_SYMLINK:
             sys.stdout.write(" -> %s\n" % entry.alias)
         elif int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_HARDLINK:
-            sys.stdout.write("Points to file ID: %d\n" % entry.equiv_id)
+            sys.stdout.write("\nPoints to file ID: %d\n" % entry.equiv_id)
         else:
             sys.stdout.write("\n")
         sys.stdout.write("File size: 0x%X\n" % entry.file_size)
@@ -281,8 +281,12 @@ class YAFFSExtractor(YAFFS):
                     except Exception as e:
                         sys.stderr.write("WARNING: Failed to create file '%s': %s\n" % (file_path, str(e)))
                 elif int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_SPECIAL:
-                    # TODO: Create special file types
-                    pass
+                    try:
+                        os.mknod(file_path, entry.yst_mode, entry.yst_rdev)
+                        file_count += 1
+                    except Exception as e:
+                        sys.stderr.write("Failed to create special device file '%s': %s\n" % (file_path, str(e)))
+
 
         # Create symlinks
         for (entry_id, file_path) in self.file_paths.iteritems():
