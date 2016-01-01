@@ -453,7 +453,7 @@ if __name__ == "__main__":
         out_dir = sys.argv[2]
         auto_detect = True
     except Exception as e:
-        sys.stdout.write("Usage: %s <page_size> <spare_size> <yaffs image> <output directory>\n" % sys.argv[0])
+        sys.stdout.write("Usage: %s <yaffs image> <output directory>\n" % sys.argv[0])
         sys.exit(1)
 
     try:
