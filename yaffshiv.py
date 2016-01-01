@@ -4,6 +4,12 @@ import os
 import sys
 import struct
 
+class YAFFSConfig(object):
+
+    def __init__(self, **kwargs):
+        for (k, v) in kwargs.iteritems():
+            setattr(self, k, v)
+
 class YAFFS(object):
     BIG_ENDIAN = ">"
     LITTLE_ENDIAN = "<"
@@ -22,15 +28,15 @@ class YAFFS(object):
     DEFAULT_PAGE_SIZE           = 0x1000
     DEFAULT_SPARE_SIZE          = 0x10
 
+    data = b''
     offset = 0
-    page_size = 0
-    spare_size = 0
+    config = None
 
     def read_long(self):
-        return struct.unpack("%sL" % self.endianess, self.data[self.offset:self.offset+4])[0]
+        return struct.unpack("%sL" % self.config.endianess, self.data[self.offset:self.offset+4])[0]
 
     def read_short(self):
-        return struct.unpack("%sH" % self.endianess, self.data[self.offset:self.offset+2])[0]
+        return struct.unpack("%sH" % self.config.endianess, self.data[self.offset:self.offset+2])[0]
 
     def read_next(self, size, raw=False):
         if size == 4 and not raw:
@@ -44,8 +50,8 @@ class YAFFS(object):
         return val
 
     def read_page(self):
-        data = self.read_next(self.page_size)
-        spare = self.read_next(self.spare_size)
+        data = self.read_next(self.config.page_size)
+        spare = self.read_next(self.config.spare_size)
         return (data, spare)
 
     def null_terminate_string(self, string):
@@ -67,9 +73,9 @@ class YAFFSObjType(YAFFS):
                 YAFFS.YAFFS_OBJECT_TYPE_SPECIAL   : "YAFFS_OBJECT_TYPE_SPECIAL",
                }
 
-    def __init__(self, data, endianess=YAFFS.LITTLE_ENDIAN):
+    def __init__(self, data, config):
         self.data = data
-        self.endianess = endianess
+        self.config = config
         self._type = self.read_long()
         self.offset = self.offset
 
@@ -84,13 +90,13 @@ class YAFFSObjType(YAFFS):
 
 class YAFFSSpare(YAFFS):
 
-    def __init__(self, data, endianess=YAFFS.LITTLE_ENDIAN):
+    def __init__(self, data, config):
         self.data = data
-        self.endianess = endianess
+        self.config = config
 
-        # Some YAFFS images seem to have an extra 2 bytes before the chunk/obj IDs?
-        # Always 0xFFFF.
-        if self.read_short() == 0xFFFF:
+        # YAFFS images built without --yaffs-ecclayout have an extra two
+        # bytes before the chunk ID. Always 0xFFFF (?).
+        if self.config.ecclayout or (self.config.auto_detect and self.read_short() == 0xFFFF):
             junk = self.read_next(2)
 
         self.chunk_id = self.read_next(4)
@@ -98,14 +104,13 @@ class YAFFSSpare(YAFFS):
 
 class YAFFSEntry(YAFFS):
 
-    def __init__(self, data, spare, endianess=YAFFS.LITTLE_ENDIAN):
-        self.offset = 0
+    def __init__(self, data, spare, config):
         self.data = data
-        self.endianess = endianess
+        self.config = config
         self.file_data = b''
 
         obj_type_raw = self.read_next(4, raw=True)
-        self.yaffs_obj_type = YAFFSObjType(obj_type_raw, self.endianess)
+        self.yaffs_obj_type = YAFFSObjType(obj_type_raw, self.config)
 
         self.parent_obj_id = self.read_next(4)
 
@@ -154,17 +159,15 @@ class YAFFSEntry(YAFFS):
         else:
             self.file_size = 0
 
-        self.spare = YAFFSSpare(spare, self.endianess)
+        self.spare = YAFFSSpare(spare, self.config)
         self.yaffs_obj_id = self.spare.obj_id
 
 class YAFFSParser(YAFFS):
 
-    def __init__(self, data, page_size=YAFFS.DEFAULT_PAGE_SIZE, spare_size=YAFFS.DEFAULT_SPARE_SIZE, endianess=YAFFS.LITTLE_ENDIAN):
+    def __init__(self, data, config):
         self.data = data
         self.data_len = len(data)
-        self.page_size = page_size
-        self.spare_size = spare_size
-        self.endianess = endianess
+        self.config = config
 
     def __enter__(self):
         return self
@@ -176,7 +179,7 @@ class YAFFSParser(YAFFS):
         while self.offset < self.data_len:
             # Read and parse the object header data
             (obj_hdr_data, obj_hdr_spare) = self.read_page()
-            obj_hdr = YAFFSEntry(obj_hdr_data, obj_hdr_spare, self.endianess)
+            obj_hdr = YAFFSEntry(obj_hdr_data, obj_hdr_spare, self.config)
 
             # Read in the file data, one page at a time
             if obj_hdr.file_size > 0:
@@ -195,21 +198,16 @@ class YAFFSParser(YAFFS):
 
 class YAFFSExtractor(YAFFS):
 
-    def __init__(self, fname, page_size=YAFFS.DEFAULT_PAGE_SIZE, spare_size=YAFFS.DEFAULT_SPARE_SIZE, endianess=YAFFS.LITTLE_ENDIAN):
+    def __init__(self, data, config):
         self.file_paths = {}
         self.file_entries = {}
-
-        self.page_size = page_size
-        self.spare_size = spare_size
-        self.endianess = endianess
-
-        with open(fname, 'rb') as fp:
-            self.data = fp.read()
+        self.data = data
+        self.config = config
 
     def parse(self):
         count = 0
 
-        with YAFFSParser(self.data, page_size=self.page_size, spare_size=self.spare_size, endianess=self.endianess) as parser:
+        with YAFFSParser(self.data, self.config) as parser:
             for entry in parser.next_entry():
                 if self.file_paths.has_key(entry.parent_obj_id):
                     path = os.path.join(self.file_paths[entry.parent_obj_id], entry.name)
@@ -221,23 +219,25 @@ class YAFFSExtractor(YAFFS):
 
                 count += 1
 
-                #sys.stdout.write("###################################################\n")
-                #sys.stdout.write("File ID: %d\n" % entry.yaffs_obj_id)
-                #sys.stdout.write("File type: %s\n" % str(entry.yaffs_obj_type))
-                #sys.stdout.write("File parent ID: %d\n" % entry.parent_obj_id)
-                #sys.stdout.write("File name: %s\n" % entry.name)
-                #sys.stdout.write("File path: %s" % self.file_paths[entry.yaffs_obj_id])
-                #if int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_SYMLINK:
-                #    sys.stdout.write(" -> %s\n" % entry.alias)
-                #else:
-                #    sys.stdout.write("\n")
-                #sys.stdout.write("File size: 0x%X\n" % entry.file_size)
-                #sys.stdout.write("File mode: %d\n" % entry.yst_mode)
-                #sys.stdout.write("File UID: %d\n" % entry.yst_uid)
-                #sys.stdout.write("File GID: %d\n" % entry.yst_gid)
-                #sys.stdout.write("First bytes: %s\n" % entry.file_data[0:16])
+                if self.config.debug:
+                    sys.stdout.write("###################################################\n")
+                    sys.stdout.write("File ID: %d\n" % entry.yaffs_obj_id)
+                    sys.stdout.write("File type: %s\n" % str(entry.yaffs_obj_type))
+                    sys.stdout.write("File parent ID: %d\n" % entry.parent_obj_id)
+                    sys.stdout.write("File name: %s\n" % entry.name)
+                    sys.stdout.write("File path: %s" % self.file_paths[entry.yaffs_obj_id])
+                    if int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_SYMLINK:
+                        sys.stdout.write(" -> %s\n" % entry.alias)
+                    else:
+                        sys.stdout.write("\n")
+                    sys.stdout.write("File size: 0x%X\n" % entry.file_size)
+                    sys.stdout.write("File mode: %d\n" % entry.yst_mode)
+                    sys.stdout.write("File UID: %d\n" % entry.yst_uid)
+                    sys.stdout.write("File GID: %d\n" % entry.yst_gid)
+                    sys.stdout.write("First bytes: %s\n" % entry.file_data[0:16])
 
-        #sys.stdout.write("###################################################\n\n")
+        if self.config.debug:
+            sys.stdout.write("###################################################\n\n")
         return count
 
     def extract(self, outdir):
@@ -249,7 +249,7 @@ class YAFFSExtractor(YAFFS):
             os.makedirs(outdir)
         except Exception as e:
             sys.stderr.write("Failed to create output directory: %s\n" % str(e))
-            return -1
+            return (-1, -1, -1)
 
         # Create directories
         for (entry_id, file_path) in self.file_paths.iteritems():
@@ -300,9 +300,26 @@ if __name__ == "__main__":
         sys.stdout.write("Usage: %s <page_size> <spare_size> <yaffs image> <output directory>\n" % sys.argv[0])
         sys.exit(1)
 
-    fs = YAFFSExtractor(in_file, page_size=page_size, spare_size=spare_size)
+    try:
+        with open(in_file, 'rb') as fp:
+            data = fp.read()
+    except Exception as e:
+        sys.stderr.write("Failed to open file '%s': %s\n" % (in_file, str(e)))
+        sys.exit(1)
+
+    config = YAFFSConfig(endianess=YAFFS.LITTLE_ENDIAN,
+                         page_size=page_size,
+                         spare_size=spare_size,
+                         ecclayout=True,
+                         audo_detect=True,
+                         debug=False)
+
+
+    fs = YAFFSExtractor(data, config)
+    sys.stdout.write("Parsing YAFFS objects...\n")
     obj_count = fs.parse()
     sys.stdout.write("Parsed %d objects\n" % obj_count)
-    (dc, fc, sc) = fs.extract(out_dir)
-    sys.stdout.write("Created %d directories, %d files, and %d symlinks.\n" % (dc, fc, sc))
+
+    #(dc, fc, sc) = fs.extract(out_dir)
+    #sys.stdout.write("Created %d directories, %d files, and %d symlinks.\n" % (dc, fc, sc))
 
