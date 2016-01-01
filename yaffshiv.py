@@ -228,6 +228,8 @@ class YAFFSExtractor(YAFFS):
         sys.stdout.write("File name: %s" % self.file_paths[entry.yaffs_obj_id])
         if int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_SYMLINK:
             sys.stdout.write(" -> %s\n" % entry.alias)
+        elif int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_HARDLINK:
+            sys.stdout.write("Points to file ID: %d\n" % entry.equiv_id)
         else:
             sys.stdout.write("\n")
         sys.stdout.write("File size: 0x%X\n" % entry.file_size)
@@ -251,7 +253,7 @@ class YAFFSExtractor(YAFFS):
     def extract(self, outdir):
         dir_count = 0
         file_count = 0
-        symlink_count = 0
+        link_count = 0
 
         # Create directories
         for (entry_id, file_path) in self.file_paths.iteritems():
@@ -278,20 +280,33 @@ class YAFFSExtractor(YAFFS):
                         file_count += 1
                     except Exception as e:
                         sys.stderr.write("WARNING: Failed to create file '%s': %s\n" % (file_path, str(e)))
+                elif int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_SPECIAL:
+                    # TODO: Create special file types
+                    pass
 
         # Create symlinks
         for (entry_id, file_path) in self.file_paths.iteritems():
             entry = self.file_entries[entry_id]
-            if file_path and int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_SYMLINK:
-                dst = os.path.join(outdir, file_path)
-                src = entry.alias
-                try:
-                    os.symlink(src, dst)
-                    symlink_count += 1
-                except Exception as e:
-                    sys.stderr.write("WARNING: Failed to create symlink '%s' -> '%s': %s\n" % (dst, src, str(e)))
 
-        return (dir_count, file_count, symlink_count)
+            if file_path:
+                dst = os.path.join(outdir, file_path)
+
+                if int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_SYMLINK:
+                    src = entry.alias
+                    try:
+                        os.symlink(src, dst)
+                        link_count += 1
+                    except Exception as e:
+                        sys.stderr.write("WARNING: Failed to create symlink '%s' -> '%s': %s\n" % (dst, src, str(e)))
+                elif int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_HARDLINK:
+                    try:
+                        src = os.path.join(outdir, self.file_paths[entry.equiv_id])
+                        os.link(src, dst)
+                        link_count += 1
+                    except Exception as e:
+                        sys.stderr.write("WARNING: Failed to create hard link '%s' -> '%s': %s\n" % (dst, src, str(e)))
+
+        return (dir_count, file_count, link_count)
 
 if __name__ == "__main__":
 
@@ -332,6 +347,6 @@ if __name__ == "__main__":
     obj_count = fs.parse()
     sys.stdout.write("Parsed %d objects\n" % obj_count)
 
-    (dc, fc, sc) = fs.extract(out_dir)
-    sys.stdout.write("Created %d directories, %d files, and %d symlinks.\n" % (dc, fc, sc))
+    (dc, fc, lc) = fs.extract(out_dir)
+    sys.stdout.write("Created %d directories, %d files, and %d links.\n" % (dc, fc, lc))
 
