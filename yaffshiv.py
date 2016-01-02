@@ -555,7 +555,7 @@ if __name__ == "__main__":
         sys.stderr.write("    -e, --endianess=<big|little>    Set input file endianess [default: little]\n")
         sys.stderr.write("    -n, --no-ecc                    Don't use the YAFFS oob scheme [default: True]\n")
         sys.stderr.write("    -a, --auto                      Attempt to auto detect page size, spare size, ECC, and endianess settings [default: False]\n")
-        sys.stderr.write("    -o, --ownership                 Preserve original ownership of extracted files [default: False]\n\n")
+        sys.stderr.write("    -o, --ownership                 Preserve original ownership of extracted files [default: False]\n")
         sys.stderr.write("    -D, --debug                     Enable verbose debug output [default: False]\n\n")
         sys.stderr.write("* = Required argument\n\n")
         sys.exit(1)
