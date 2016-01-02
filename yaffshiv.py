@@ -3,6 +3,7 @@
 import os
 import sys
 import struct
+import string
 
 class Compat(object):
     '''
@@ -48,17 +49,21 @@ class YAFFSConfig(object):
         self.preserve_mode = True
         self.preserve_owner = False
         self.debug = False
+        self.auto = False
+        self.sample_data = None
 
         for (k, v) in Compat.iterator(kwargs):
             setattr(self, k, v)
 
-        if hasattr(self, 'auto') and hasattr(self, 'sample_data'):
+        if self.auto and self.sample_data:
             self._auto_detect_settings()
-            if self.debug:
-                sys.stdout.write("Page size: %d\n" % self.page_size)
-                sys.stdout.write("Spare size: %d\n" % self.spare_size)
-                sys.stdout.write("ECC layout: %s\n" % self.ecclayout)
-                sys.stdout.write("Endianess: %s\n" % self.endianess)
+
+        if self.debug:
+            sys.stdout.write("YAFFS configuration settings:\n")
+            sys.stdout.write("    Page size: %d\n" % self.page_size)
+            sys.stdout.write("    Spare size: %d\n" % self.spare_size)
+            sys.stdout.write("    ECC layout: %s\n" % self.ecclayout)
+            sys.stdout.write("    Endianess: %s\n\n" % self.endianess)
 
     def _auto_detect_settings(self):
         valid_page_sizes = [512, 1024, 2048, 4096, 8192, 16384, -1]
@@ -287,6 +292,7 @@ class YAFFSParser(YAFFS):
         self.data = data
         self.data_len = len(data)
         self.config = config
+        self.printset = set(Compat.str2bytes(string.printable))
 
     def __enter__(self):
         return self
@@ -300,8 +306,20 @@ class YAFFSParser(YAFFS):
             (obj_hdr_data, obj_hdr_spare) = self.read_page()
             obj_hdr = YAFFSEntry(obj_hdr_data, obj_hdr_spare, self.config)
 
+            # Sanity check the file name. This is done primarily for cases where there is trailing data
+            # at the end of the YAFFS file system, so if we're processing bogus data then the file name
+            # will likely be garbled.
+            if obj_hdr.name:
+                if not set(obj_hdr.name).issubset(self.printset):
+                    raise Exception("Object ID #%d has a non-printable file name [%s]!\n" % (obj_hdr.yaffs_obj_id, obj_hdr.name))
+
             # Read in the file data, one page at a time
             if obj_hdr.file_size > 0:
+
+                # Sanity check the file size before reading it. Especially important if fed garbage data!
+                if obj_hdr.file_size > (self.data_len - self.offset):
+                    raise Exception("File size for file '%s' exceeds the end of the file system!\n" % obj_hdr.name)
+
                 bytes_remaining = obj_hdr.file_size
 
                 while bytes_remaining:
@@ -332,6 +350,9 @@ class YAFFSExtractor(YAFFS):
                 if Compat.has_key(self.file_paths, entry.parent_obj_id):
                     path = os.path.join(self.file_paths[entry.parent_obj_id], entry.name)
                 else:
+                    if entry.parent_obj_id != 1:
+                        sys.stderr.write("Warning: File %s is the child of an unknown parent object [%d]!\n" % (entry.name,
+                                                                                                                entry.parent_obj_id))
                     path = entry.name
 
                 self.file_paths[entry.yaffs_obj_id] = path
@@ -428,8 +449,8 @@ class YAFFSExtractor(YAFFS):
                     except Exception as e:
                         sys.stderr.write("WARNING: Failed to create symlink '%s' -> '%s': %s\n" % (dst, src, str(e)))
                 elif int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_HARDLINK:
+                    src = os.path.join(outdir, self.file_paths[entry.equiv_id])
                     try:
-                        src = os.path.join(outdir, self.file_paths[entry.equiv_id])
                         os.link(src, dst)
                         link_count += 1
                     except Exception as e:
@@ -439,7 +460,7 @@ class YAFFSExtractor(YAFFS):
 
 if __name__ == "__main__":
 
-    from getopt import GetoptError, getopt as GetOpt
+    from getopt import GetoptError, getopt
 
     page_size = None
     spare_size = None
@@ -453,14 +474,15 @@ if __name__ == "__main__":
     out_dir = None
 
     try:
-        (opts, args) = GetOpt(sys.argv[1:], b"f:d:p:s:e:c:oa", [b"file=",
-                                                               b"dir=",
-                                                               b"page-size=",
-                                                               b"spare-size=",
-                                                               b"endianess=",
-                                                               b"no-ecc",
-                                                               b"ownership",
-                                                               b"auto"])
+        (opts, args) = getopt(sys.argv[1:], "f:d:p:s:e:c:oaD", ["file=",
+                                                               "dir=",
+                                                               "page-size=",
+                                                               "spare-size=",
+                                                               "endianess=",
+                                                               "no-ecc",
+                                                               "ownership",
+                                                               "debug",
+                                                               "auto"])
     except GetoptError as e:
         sys.stderr.write(str(e) + "\n")
         sys.stderr.write("\nUsage: %s [OPTIONS]\n\n" % sys.argv[0])
@@ -469,19 +491,35 @@ if __name__ == "__main__":
         sys.stderr.write("    -p, --page-size=<int>           YAFFS page size [default: 2048]\n")
         sys.stderr.write("    -s, --spare-size=<int>          YAFFS spare size [default: 64]\n")
         sys.stderr.write("    -e, --endianess=<big|little>    Set input file endianess [default: little]\n")
-        sys.stderr.write("    -n, --no-ecc                    Use Linux MTD scheme instead of YAFFS oob scheme[default: YAFFS oob]\n")
+        sys.stderr.write("    -n, --no-ecc                    Don't use the YAFFS oob scheme [default: True]\n")
         sys.stderr.write("    -a, --auto                      Attempt to auto detect page size, spare size, ECC, and endianess settings [default: False]\n")
         sys.stderr.write("    -o, --ownership                 Preserve original ownership of extracted files [default: False]\n\n")
+        sys.stderr.write("    -D, --debug                     Enable verbose debug output [default: False]\n\n")
         sys.stderr.write("* = Required argument\n\n")
         sys.exit(1)
 
     for (opt, arg) in opts:
-        if opt in [b"-f", b"--file"]:
+        if opt in ["-f", "--file"]:
             in_file = arg
-        elif opt in [b"-d", b"--dir"]:
+        elif opt in ["-d", "--dir"]:
             out_dir = arg
-        elif opt in [b"-a", b"--auto"]:
+        elif opt in ["-a", "--auto"]:
             auto_detect = True
+        elif opt in ["-n", "--no-ecc"]:
+            ecclayout = False
+        elif opt in ["-e", "--endianess"]:
+            if arg.lower()[0] == 'b':
+                endianess = YAFFS.BIG_ENDIAN
+            else:
+                endianess = YAFFS.LITTLE_ENDIAN
+        elif opt in ["-s", "--spare"]:
+            spare_size = int(arg)
+        elif opt in ["-p", "--page-size"]:
+            page_size = int(arg)
+        elif opt in ["-o", "--ownership"]:
+            preserve_ownership = True
+        elif opt in ["-D", "--debug"]:
+            debug = True
 
     if not in_file or not out_dir:
         sys.stderr.write("Error: You must specify an input file and an output directory!\n")
@@ -502,9 +540,9 @@ if __name__ == "__main__":
 
     # Either auto-detect configuration settings, or use hard-coded defaults
     if auto_detect:
-        config = YAFFSConfig(auto=True, sample_data=data[0:10240])
+        config = YAFFSConfig(auto=True, sample_data=data[0:10240], debug=debug)
     else:
-        config = YAFFSConfig()
+        config = YAFFSConfig(debug=debug)
 
     # Manual settings override default / auto-detected settings
     if spare_size is not None:
@@ -519,14 +557,13 @@ if __name__ == "__main__":
         config.preserve_mode = preserve_mode
     if preserve_owner is not None:
         config.preserve_owner = preserve_owner
-    if debug is not None:
-        config.debug = debug
 
     fs = YAFFSExtractor(data, config)
     sys.stdout.write("Parsing YAFFS objects...\n")
     obj_count = fs.parse()
     sys.stdout.write("Parsed %d objects\n" % obj_count)
 
+    sys.stdout.write("Extracting file objects...\n")
     (dc, fc, lc) = fs.extract(out_dir)
     sys.stdout.write("Created %d directories, %d files, and %d links.\n" % (dc, fc, lc))
 
