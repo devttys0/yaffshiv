@@ -31,6 +31,9 @@ class Compat(object):
         else:
             return d.has_key(k)
 
+class YAFFSException(Exception):
+    pass
+
 class YAFFSConfig(object):
     '''
     Container class for storing global configuration data.
@@ -125,7 +128,7 @@ class YAFFSConfig(object):
         for page_size in valid_page_sizes:
 
             if page_size == -1:
-                raise Exception("Auto-detection failed: Could not locate start of spare data section.")
+                raise YAFFSException("Auto-detection failed: Could not locate start of spare data section.")
 
             # Matching the spare data signatures not only tells us the page size, but also
             # endianess and ECC layout as well!
@@ -185,11 +188,11 @@ class YAFFSConfig(object):
             # Spare section ends 4 bytes before the spare_sig signature
             self.spare_size = self.sample_data[self.page_size:].index(spare_sig) - 4
         except Exception as e:
-            raise Exception("Auto-detection failed: Could not locate end of spare data section.")
+            raise YAFFSException("Auto-detection failed: Could not locate end of spare data section.")
 
         # Sanity check the spare size, make sure it looks legit
         if self.spare_size not in valid_spare_sizes:
-            raise Exception("Auto-detection failed: Detected an unlikely spare size: %d" % self.spare_size)
+            raise YAFFSException("Auto-detection failed: Detected an unlikely spare size: %d" % self.spare_size)
 
 class YAFFS(object):
     '''
@@ -273,8 +276,14 @@ class YAFFS(object):
         The page and spare data sizes are determined by self.config.page_size and
         self.config.spare_size.
         '''
+        if self.config.debug:
+            sys.stdout.write("Reading page data from 0x%X - 0x%X\n" % (self.offset, self.offset+self.config.page_size))
         page_data = self.read_next(self.config.page_size)
+            
+        if self.config.debug:
+            sys.stdout.write("Reading spare data from 0x%X - 0x%X\n" % (self.offset, self.offset+self.config.spare_size))
         spare_data  = self.read_next(self.config.spare_size)
+
         return (page_data, spare_data)
 
     def null_terminate_string(self, string):
@@ -314,7 +323,7 @@ class YAFFSObjType(YAFFS):
         self._type = self.read_next(4)
 
         if self._type not in self.TYPE2STR.keys():
-            raise Exception("Invalid object type identifier: 0x%X!" % self._type)
+            raise YAFFSException("Invalid object type identifier: 0x%X!" % self._type)
 
     def __str__(self):
         return self.TYPE2STR[self._type]
@@ -465,15 +474,15 @@ class YAFFSParser(YAFFS):
             # will likely be garbled.
             if obj_hdr.name:
                 if not set(obj_hdr.name).issubset(self.printset):
-                    raise Exception("Object ID #%d has a non-printable file name [%s]!\n" % (obj_hdr.yaffs_obj_id, obj_hdr.name))
+                    raise YAFFSException("Object ID #%d has a non-printable file name [%s]!\n" % (obj_hdr.yaffs_obj_id, obj_hdr.name))
 
             # Read in the file data, one page at a time
             if obj_hdr.file_size > 0:
 
                 # Sanity check the file size before reading it. Especially important if fed garbage data!
                 if obj_hdr.file_size > (self.data_len - self.offset):
-                    raise Exception("File size for file '%s' exceeds the end of the file system [0x%X]!\n" % (obj_hdr.name,
-                                                                                                              obj_hdr.file_size))
+                    raise YAFFSException("File size for file '%s' exceeds the end of the file system [0x%X]!\n" % (obj_hdr.name,
+                                                                                                                   obj_hdr.file_size))
 
                 bytes_remaining = obj_hdr.file_size
 
@@ -515,23 +524,27 @@ class YAFFSExtractor(YAFFS):
         Must be called before all other methods in this class.
         '''
         with YAFFSParser(self.data, self.config) as parser:
-            for entry in parser.next_entry():
+            try:
+                for entry in parser.next_entry():
 
-                # Figure out the full path of this file entry
-                if Compat.has_key(self.file_paths, entry.parent_obj_id):
-                    path = os.path.join(self.file_paths[entry.parent_obj_id], entry.name)
-                else:
-                    if entry.parent_obj_id != 1:
-                        sys.stderr.write("Warning: File %s is the child of an unknown parent object [%d]!\n" % (entry.name,
+                    # Figure out the full path of this file entry
+                    if Compat.has_key(self.file_paths, entry.parent_obj_id):
+                        path = os.path.join(self.file_paths[entry.parent_obj_id], entry.name)
+                    else:
+                        if entry.parent_obj_id != 1:
+                            sys.stderr.write("Warning: File %s is the child of an unknown parent object [%d]!\n" % (entry.name,
                                                                                                                 entry.parent_obj_id))
-                    path = entry.name
+                        path = entry.name
 
-                # Store full file paths and entry data for later use
-                self.file_paths[entry.yaffs_obj_id] = path
-                self.file_entries[entry.yaffs_obj_id] = entry
+                    # Store full file paths and entry data for later use
+                    self.file_paths[entry.yaffs_obj_id] = path
+                    self.file_entries[entry.yaffs_obj_id] = entry
 
-                if self.config.debug:
-                    self._print_entry(entry)
+                    if self.config.debug:
+                        self._print_entry(entry)
+            except YAFFSException as e:
+                sys.stderr.write("Parser halt due to exception: %s\n" % str(e))
+                sys.stderr.write("Possible data corruption, invalid YAFFS settings, or we've just reached the end of the file system.\n")
 
         return len(self.file_entries)
 
@@ -703,7 +716,7 @@ if __name__ == "__main__":
                 endianess = YAFFS.BIG_ENDIAN
             else:
                 endianess = YAFFS.LITTLE_ENDIAN
-        elif opt in ["-s", "--spare"]:
+        elif opt in ["-s", "--spare-size"]:
             spare_size = int(arg)
         elif opt in ["-p", "--page-size"]:
             page_size = int(arg)
