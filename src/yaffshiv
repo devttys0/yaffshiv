@@ -56,6 +56,9 @@ class YAFFSConfig(object):
     # a big endian target. Further, if ECC was not used, there would be two additional
     # bytes (0xFFFF) in front of the 0x00100000, so these signatures can also be
     # used to detect if ECC is used or not.
+    #
+    # Note that this should work for a typical Linux YAFFS rootfs, but not for all
+    # possible YAFFS file system images.
     SPARE_START_BIG_ENDIAN_ECC = b"\x00\x00\x10\x00"
     SPARE_START_BIG_ENDIAN_NO_ECC = b"\xFF\xFF\x00\x00\x10\x00"
     SPARE_START_LITTLE_ENDIAN_ECC = b"\x00\x10\x00\x00"
@@ -659,6 +662,10 @@ class YAFFSExtractor(YAFFS):
 
 
 def parse_yaffs(fs):
+    '''
+    Attempts to parse the file system via the provided YAFFSExtractor instance.
+    Returns True if no errors were encountered during process, else returns False.
+    '''
     success = True
 
     # If something is going to go wrong, it will most likely be during the parsing stage
@@ -789,9 +796,9 @@ def main():
     # Try auto-detected / manual / default settings first.
     # If those work without errors, then assume they are correct.
     fs = YAFFSExtractor(data, config)
-    # If there were errors, and brute forcing is enabled, loop through
-    # all possible configuration combinations looking for the one combination
-    # that produces the most successfully parsed object entries.
+    # If there were errors in parse_yaffs, and brute forcing is enabled, loop
+    # through all possible configuration combinations looking for the one
+    # combination that produces the most successfully parsed object entries.
     if not parse_yaffs(fs) and brute_force:
         for endianess in [YAFFS.LITTLE_ENDIAN, YAFFS.BIG_ENDIAN]:
             for ecclayout in [True, False]:
