@@ -79,6 +79,7 @@ class YAFFSConfig(object):
         if self.auto and self.sample_data:
             self._auto_detect_settings()
 
+    def print_settings(self):
         if self.endianess == YAFFS.LITTLE_ENDIAN:
             endian_str = "Little"
         else:
@@ -87,7 +88,7 @@ class YAFFSConfig(object):
         sys.stdout.write("Page size: %d\n" % self.page_size)
         sys.stdout.write("Spare size: %d\n" % self.spare_size)
         sys.stdout.write("ECC layout: %s\n" % self.ecclayout)
-        sys.stdout.write("Endianess: %s\n" % endian_str)
+        sys.stdout.write("Endianess: %s\n\n" % endian_str)
 
     def _auto_detect_settings(self):
         '''
@@ -113,13 +114,8 @@ class YAFFSConfig(object):
         #
         # Thus, we keep a list of valid page sizes and spare sizes, but there
         # is no restriction on their pairing.
-        valid_page_sizes = [512, 1024, 2048, 4096, 8192, 16384, -1]
-        valid_spare_sizes = []
-
-        # Valid spare size list is built dynamically based on the valid_page_sizes list
-        for page_size in valid_page_sizes:
-            if page_size != -1:
-                valid_spare_sizes.append(page_size / 32)
+        valid_page_sizes = YAFFS.PAGE_SIZES + [-1]
+        valid_spare_sizes = YAFFS.SPARE_SIZES
 
         # Spare data should start at the end of the page. Assuming that the page starts
         # at the beginning of the data blob we're working with (if it doesn't, nothing
@@ -203,6 +199,14 @@ class YAFFS(object):
     BIG_ENDIAN = ">"
     LITTLE_ENDIAN = "<"
 
+    # Valid page and spare sizes
+    PAGE_SIZES  = [512, 1024, 2048, 4096, 8192, 16384]
+    SPARE_SIZES = [16,  32,   64,   128,  256,  512]
+
+    # These are the default values used by mkyaffs
+    DEFAULT_PAGE_SIZE           = 2048
+    DEFAULT_SPARE_SIZE          = 64
+    
     # These assume non-unicode YAFFS name lengths
     # NOTE: In the YAFFS code YAFFS_MAX_NAME_LENGTH is #defined as 255.
     #       Although it does not say so, from observation this length
@@ -219,10 +223,6 @@ class YAFFS(object):
     YAFFS_OBJECT_TYPE_HARDLINK  = 4
     YAFFS_OBJECT_TYPE_SPECIAL   = 5
 
-    # These are the default values used by mkyaffs
-    DEFAULT_PAGE_SIZE           = 2048
-    DEFAULT_SPARE_SIZE          = 64
-
     # These must be overidden with valid data by any subclass wishing
     # to use the read_long, read_short, read_next or read_block methods.
     #
@@ -234,6 +234,13 @@ class YAFFS(object):
     data = b''
     offset = 0
     config = None
+
+    def dbg_write(self, msg):
+        '''
+        Prints debug message if self.config.debug is True.
+        '''
+        if self.config.debug:
+            sys.stderr.write(msg)
 
     def read_long(self):
         '''
@@ -276,12 +283,10 @@ class YAFFS(object):
         The page and spare data sizes are determined by self.config.page_size and
         self.config.spare_size.
         '''
-        if self.config.debug:
-            sys.stdout.write("Reading page data from 0x%X - 0x%X\n" % (self.offset, self.offset+self.config.page_size))
+        self.dbg_write("Reading page data from 0x%X - 0x%X\n" % (self.offset, self.offset+self.config.page_size))
         page_data = self.read_next(self.config.page_size)
             
-        if self.config.debug:
-            sys.stdout.write("Reading spare data from 0x%X - 0x%X\n" % (self.offset, self.offset+self.config.spare_size))
+        self.dbg_write("Reading spare data from 0x%X - 0x%X\n" % (self.offset, self.offset+self.config.spare_size))
         spare_data  = self.read_next(self.config.spare_size)
 
         return (page_data, spare_data)
@@ -524,27 +529,23 @@ class YAFFSExtractor(YAFFS):
         Must be called before all other methods in this class.
         '''
         with YAFFSParser(self.data, self.config) as parser:
-            try:
-                for entry in parser.next_entry():
+            for entry in parser.next_entry():
 
-                    # Figure out the full path of this file entry
-                    if Compat.has_key(self.file_paths, entry.parent_obj_id):
-                        path = os.path.join(self.file_paths[entry.parent_obj_id], entry.name)
-                    else:
-                        if entry.parent_obj_id != 1:
-                            sys.stderr.write("Warning: File %s is the child of an unknown parent object [%d]!\n" % (entry.name,
-                                                                                                                entry.parent_obj_id))
-                        path = entry.name
+                # Figure out the full path of this file entry
+                if Compat.has_key(self.file_paths, entry.parent_obj_id):
+                    path = os.path.join(self.file_paths[entry.parent_obj_id], entry.name)
+                else:
+                    if entry.parent_obj_id != 1:
+                        self.dbg_write("Warning: File %s is the child of an unknown parent object [%d]!\n" % (entry.name,
+                                                                                                              entry.parent_obj_id))
+                    path = entry.name
 
-                    # Store full file paths and entry data for later use
-                    self.file_paths[entry.yaffs_obj_id] = path
-                    self.file_entries[entry.yaffs_obj_id] = entry
+                # Store full file paths and entry data for later use
+                self.file_paths[entry.yaffs_obj_id] = path
+                self.file_entries[entry.yaffs_obj_id] = entry
 
-                    if self.config.debug:
-                        self._print_entry(entry)
-            except YAFFSException as e:
-                sys.stderr.write("Parser halt due to exception: %s\n" % str(e))
-                sys.stderr.write("Possible data corruption, invalid YAFFS settings, or we've just reached the end of the file system.\n")
+                if self.config.debug:
+                    self._print_entry(entry)
 
         return len(self.file_entries)
 
@@ -656,8 +657,22 @@ class YAFFSExtractor(YAFFS):
 
         return (dir_count, file_count, link_count)
 
-if __name__ == "__main__":
 
+def parse_yaffs(fs):
+    success = True
+
+    # If something is going to go wrong, it will most likely be during the parsing stage
+    try:
+        fs.dbg_write("Parsing YAFFS objects...\n")
+        fs.parse()
+        fs.dbg_write("Parsed %d objects\n" % len(fs.file_entries))
+    except Exception as e:
+        fs.dbg_write("File system parsing failed: %s\n" % str(e))
+        success = False
+
+    return success
+
+def main():
     from getopt import GetoptError, getopt
 
     page_size = None
@@ -671,18 +686,22 @@ if __name__ == "__main__":
     in_file = None
     out_dir = None
     list_files = False
+    brute_force = False
+    fs = None
+    config = None
 
     try:
-        (opts, args) = getopt(sys.argv[1:], "f:d:p:s:e:c:oaDl", ["file=",
-                                                                 "dir=",
-                                                                 "page-size=",
-                                                                 "spare-size=",
-                                                                 "endianess=",
-                                                                 "no-ecc",
-                                                                 "ownership",
-                                                                 "debug",
-                                                                 "ls",
-                                                                 "auto"])
+        (opts, args) = getopt(sys.argv[1:], "f:d:p:s:e:c:oaDlb", ["file=",
+                                                                  "dir=",
+                                                                  "page-size=",
+                                                                  "spare-size=",
+                                                                  "endianess=",
+                                                                  "no-ecc",
+                                                                  "ownership",
+                                                                  "debug",
+                                                                  "ls",
+                                                                  "brute-force",
+                                                                  "auto"])
     except GetoptError as e:
         sys.stderr.write(str(e) + "\n")
         sys.stderr.write("\nUsage: %s [OPTIONS]\n\n" % sys.argv[0])
@@ -693,6 +712,7 @@ if __name__ == "__main__":
         sys.stderr.write("    -e, --endianess=<big|little>    Set input file endianess [default: little]\n")
         sys.stderr.write("    -n, --no-ecc                    Don't use the YAFFS oob scheme [default: True]\n")
         sys.stderr.write("    -a, --auto                      Attempt to auto detect page size, spare size, ECC, and endianess settings [default: False]\n")
+        sys.stderr.write("    -b, --brute-force               Attempt all combinations of page size, spare size, ECC, and endianess  [default: False]\n")
         sys.stderr.write("    -o, --ownership                 Preserve original ownership of extracted files [default: False]\n")
         sys.stderr.write("    -l, --ls                        List file system contents [default: False]\n")
         sys.stderr.write("    -D, --debug                     Enable verbose debug output [default: False]\n\n")
@@ -709,6 +729,8 @@ if __name__ == "__main__":
             list_files = True
         elif opt in ["-a", "--auto"]:
             auto_detect = True
+        elif opt in ["-b", "--brute-force"]:
+            brute_force = True
         elif opt in ["-n", "--no-ecc"]:
             ecclayout = False
         elif opt in ["-e", "--endianess"]:
@@ -744,13 +766,18 @@ if __name__ == "__main__":
         sys.exit(1)
 
     if auto_detect:
-        # First 10K of data should be more than enough to detect the YAFFS settings
-        config = YAFFSConfig(auto=True,
-                             sample_data=data[0:10240],
-                             preserve_mode=preserve_mode,
-                             preserve_owner=preserve_owner,
-                             debug=debug)
-    else:
+        try:
+            # First 10K of data should be more than enough to detect the YAFFS settings
+            config = YAFFSConfig(auto=True,
+                                 sample_data=data[0:10240],
+                                 preserve_mode=preserve_mode,
+                                 preserve_owner=preserve_owner,
+                                 debug=debug)
+        except YAFFSException as e:
+            sys.stderr.write(str(e) + "\n")
+            config = None
+
+    if config is None:
         config = YAFFSConfig(page_size=page_size,
                              spare_size=spare_size,
                              endianess=endianess,
@@ -759,16 +786,41 @@ if __name__ == "__main__":
                              preserve_owner=preserve_owner,
                              debug=debug)
 
+    # Try auto-detected / manual / default settings first.
+    # If those work without errors, then assume they are correct.
     fs = YAFFSExtractor(data, config)
+    # If there were errors, and brute forcing is enabled, loop through
+    # all possible configuration combinations looking for the one combination
+    # that produces the most successfully parsed object entries.
+    if not parse_yaffs(fs) and brute_force:
+        for endianess in [YAFFS.LITTLE_ENDIAN, YAFFS.BIG_ENDIAN]:
+            for ecclayout in [True, False]:
+                for page_size in YAFFS.PAGE_SIZES:
+                    for spare_size in YAFFS.SPARE_SIZES:
+          
+                        # This wouldn't make sense...
+                        if spare_size > page_size:
+                            continue
 
-    # If something is going to go wrong, it will most likely be during the parsing stage
-    try:
-        sys.stdout.write("Parsing YAFFS objects...\n")
-        obj_count = fs.parse()
-        sys.stdout.write("Parsed %d objects\n" % obj_count)
-    except Exception as e:
-        sys.stderr.write("File system parsing failed: %s\n" % str(e))
-        sys.exit(1)
+                        config = YAFFSConfig(page_size=page_size,
+                                             spare_size=spare_size,
+                                             endianess=endianess,
+                                             ecclayout=ecclayout,
+                                             preserve_mode=preserve_mode,
+                                             preserve_owner=preserve_owner,
+                                             debug=debug)
+
+                        tmp_fs = YAFFSExtractor(data, config)
+                        parse_yaffs(tmp_fs)
+                        if len(tmp_fs.file_entries) > len(fs.file_entries):
+                            fs = tmp_fs
+
+    if fs is None:
+        sys.stdout.write("File system parsing failed, quitting...\n")
+        return 1
+    else:
+        sys.stdout.write("Found %d file objects with the following YAFFS settings:\n" % len(fs.file_entries))
+        fs.config.print_settings()
 
     if list_files:
         fs.ls()
@@ -777,4 +829,9 @@ if __name__ == "__main__":
         sys.stdout.write("Extracting file objects...\n")
         (dc, fc, lc) = fs.extract(out_dir)
         sys.stdout.write("Created %d directories, %d files, and %d links.\n" % (dc, fc, lc))
+
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
 
