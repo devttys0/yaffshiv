@@ -34,6 +34,9 @@ class Compat(object):
 class YAFFSConfig(object):
     '''
     Container class for storing global configuration data.
+    Also includes methods for automatic detection of the
+    YAFFS configuration settings required for proper file
+    system extraction.
     '''
 
     # These are signatures that identify the start of a spare data section,
@@ -45,8 +48,9 @@ class YAFFSConfig(object):
     # 00000820  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|
     #
     # The page ends (and spare data begins) at offset 0x800; note that it starts
-    # with the bytes 0x00100000. These are reliable, and would be byte swapped for
-    # a big endian target. Further, if ECC not used, there would be two additional
+    # with the bytes 0x00100000. These represent the object's chunk ID and are reliable
+    # for the first YAFFS object entry. These would, of course, be byte swapped on
+    # a big endian target. Further, if ECC was not used, there would be two additional
     # bytes (0xFFFF) in front of the 0x00100000, so these signatures can also be
     # used to detect if ECC is used or not.
     SPARE_START_BIG_ENDIAN_ECC = b"\x00\x00\x10\x00"
@@ -160,12 +164,14 @@ class YAFFSConfig(object):
             #
             # The spare data starts at offset 0x800 and is 16 bytes in size. The next page data then
             # starts at offset 0x810. Not that the four bytes at 0x804 (in the spare data section) and
-            # the four bytes at 0x814 (in the next page data section) are identical; also, the
+            # the four bytes at 0x814 (in the next page data section) are identical. This is because
+            # the four bytes at offset 0x804 represent the object ID of the previous object, and the four
+            # bytes at offset 0x814 represent the parent object ID of the next object. Also, the
             # four bytes in the page data are always followed by 0xFFFF, as those are the unused name
             # checksum bytes.
             #
             # Thus, the signature for identifying the next page section (and hence, the end of the
-            # spare data section) becomes: [4 bytes from offset 0x804] + 0xFFFF
+            # spare data section) becomes: [the 4 bytes starting at offset 0x804] + 0xFFFF
             spare_sig = self.sample_data[self.page_size+offset:self.page_size+offset+4] + b"\xFF\xFF"
 
             # Spare section ends 4 bytes before the spare_sig signature
@@ -180,15 +186,21 @@ class YAFFSConfig(object):
 class YAFFS(object):
     '''
     Main YAFFS class; all other YAFFS classes are subclassed from this.
+    It contains some basic definitions and methods used throughout the subclasses.
     '''
 
     BIG_ENDIAN = ">"
     LITTLE_ENDIAN = "<"
 
     # These assume non-unicode YAFFS name lengths
-    YAFFS_MAX_NAME_LENGTH       = 255 - 2 # NOTE: This is from observation; YAFFS code #define says 255.
+    # NOTE: In the YAFFS code YAFFS_MAX_NAME_LENGTH is #defined as 255.
+    #       Although it does not say so, from observation this length
+    #       must include the two (unused) name checksum bytes, and as
+    #       such, it is defined here as 253.
+    YAFFS_MAX_NAME_LENGTH       = 255 - 2
     YAFFS_MAX_ALIAS_LENGTH      = 159
 
+    # Object type IDs
     YAFFS_OBJECT_TYPE_UNKNOWN   = 0
     YAFFS_OBJECT_TYPE_FILE      = 1
     YAFFS_OBJECT_TYPE_SYMLINK   = 2
@@ -196,20 +208,46 @@ class YAFFS(object):
     YAFFS_OBJECT_TYPE_HARDLINK  = 4
     YAFFS_OBJECT_TYPE_SPECIAL   = 5
 
+    # These are the default values used by mkyaffs
     DEFAULT_PAGE_SIZE           = 2048
     DEFAULT_SPARE_SIZE          = 64
 
+    # These must be overidden with valid data by any subclass wishing
+    # to use the read_long, read_short, read_next or read_block methods.
+    #
+    # data   - The data that the subclass needs to be read/parsed.
+    # offset - This is initialized to zero and auto-incremented by the read_next method.
+    #          Usually no need for subclasses to touch this unless they want to know how
+    #          far into the data they've read so far.
+    # config - An instance of the YAFFSConfig class.
     data = b''
     offset = 0
     config = None
 
     def read_long(self):
+        '''
+        Reads 4 bytes from the current self.offset location inside of self.data.
+        Returns those 4 bytes as an integer.
+        Endianess is determined by self.config.endianess.
+        Does not increment self.offset.
+        '''
         return struct.unpack("%sL" % self.config.endianess, self.data[self.offset:self.offset+4])[0]
 
     def read_short(self):
+        '''
+        Reads 2 bytes from the current self.offset location inside of self.data.
+        Returns those 4 bytes as an integer.
+        Endianess is determined by self.config.endianess.
+        Does not increment self.offset.
+        '''
         return struct.unpack("%sH" % self.config.endianess, self.data[self.offset:self.offset+2])[0]
 
     def read_next(self, size, raw=False):
+        '''
+        Reads the next size bytes from self.data and increments self.offset by size.
+        If size is 2 or 4, by default self.read_long or self.read_short will be called respectively,
+        unless raw is set to True.
+        '''
         if size == 4 and not raw:
             val = self.read_long()
         elif size == 2 and not raw:
@@ -220,12 +258,22 @@ class YAFFS(object):
         self.offset += size
         return val
 
-    def read_page(self):
-        data = self.read_next(self.config.page_size)
-        spare = self.read_next(self.config.spare_size)
-        return (data, spare)
+    def read_block(self):
+        '''
+        Reads the next page of data from self.data, including the spare OOB data.
+        Returns a tuple of (page_data, spare_data).
+        The page and spare data sizes are determined by self.config.page_size and
+        self.config.spare_size.
+        '''
+        page_data = self.read_next(self.config.page_size)
+        spare_data  = self.read_next(self.config.spare_size)
+        return (page_data, spare_data)
 
     def null_terminate_string(self, string):
+        '''
+        Searches a string for the first null byte and terminates the
+        string there. Returns the truncated string.
+        '''
         try:
             i = string.index(b'\x00')
         except Exception as e:
@@ -238,6 +286,7 @@ class YAFFSObjType(YAFFS):
     YAFFS object type container. The object type is just a 4 byte identifier.
     '''
 
+    # Just maps object ID values to printable names, used by self.__str__
     TYPE2STR = {
                 YAFFS.YAFFS_OBJECT_TYPE_UNKNOWN   : "YAFFS_OBJECT_TYPE_UNKNOWN",
                 YAFFS.YAFFS_OBJECT_TYPE_FILE      : "YAFFS_OBJECT_TYPE_FILE",
@@ -248,10 +297,13 @@ class YAFFSObjType(YAFFS):
                }
 
     def __init__(self, data, config):
+        '''
+        data   - Raw 4 byte object type identifier data.
+        config - An instance of YAFFSConfig.
+        '''
         self.data = data
         self.config = config
-        self._type = self.read_long()
-        self.offset = self.offset
+        self._type = self.read_next(4)
 
     def __str__(self):
         return self.TYPE2STR[self._type]
@@ -269,6 +321,10 @@ class YAFFSSpare(YAFFS):
     '''
 
     def __init__(self, data, config):
+        '''
+        data   - Raw bytes of the spare OOB data.
+        config - An instance of YAFFSConfig.
+        '''
         self.data = data
         self.config = config
 
@@ -287,37 +343,55 @@ class YAFFSEntry(YAFFS):
     '''
 
     def __init__(self, data, spare, config):
+        '''
+        data   - Page data, as returned by YAFFS.read_block.
+        spare  - Spare OOB data, as returned by YAFFS.read_block.
+        config - An instance of YAFFSConfig.
+        '''
         self.data = data
         self.config = config
+        # This is filled in later, by YAFFSParser.next_entry
         self.file_data = b''
 
+        # Read in the first four bytes, which are the object type ID,
+        # and pass them to YAFFSObjType for processing.
         obj_type_raw = self.read_next(4, raw=True)
         self.yaffs_obj_type = YAFFSObjType(obj_type_raw, self.config)
 
+        # The object ID of this object's parent (e.g., the ID of the directory
+        # that a file resides in).
         self.parent_obj_id = self.read_next(4)
 
+        # File name and checksum (checksum no longer used in YAFFS)
         self.sum_no_longer_used = self.read_next(2)
         self.name = self.null_terminate_string(self.read_next(self.YAFFS_MAX_NAME_LENGTH+1))
 
         # Should be 0xFFFFFFFF
         junk = self.read_next(4)
 
+        # File mode and ownership info
         self.yst_mode = self.read_next(4)
         self.yst_uid = self.read_next(4)
         self.yst_gid = self.read_next(4)
+
+        # File timestamp info
         self.yst_atime = self.read_next(4)
         self.yst_mtime = self.read_next(4)
         self.yst_ctime = self.read_next(4)
+
+        # Low 32 bits of file size
         self.file_size_low = self.read_next(4)
+
+        # Used for hard links, specifies the object ID of the file to be hardlinked to.
         self.equiv_id = self.read_next(4)
 
         # Aliases are for symlinks only
         self.alias = self.null_terminate_string(self.read_next(self.YAFFS_MAX_ALIAS_LENGTH+1))
 
-        # stuff for block and char devices (major/min)
+        # Stuff for block and char devices (equivalent of stat.st_rdev in C)
         self.yst_rdev = self.read_next(4)
 
-        # Appears to be for WinCE
+        # Appears to be for timestamp stuff for WinCE
         self.win_ctime_1 = self.read_next(4)
         self.win_ctime_2 = self.read_next(4)
         self.win_atime_1 = self.read_next(4)
@@ -325,15 +399,17 @@ class YAFFSEntry(YAFFS):
         self.win_mtime_1 = self.read_next(4)
         self.win_mtime_2 = self.read_next(4)
 
+        # The only thing this code uses from these entries is file_size_high (high 32 bits of
+        # the file size).
         self.inband_shadowed_obj_id = self.read_next(4)
         self.inband_is_shrink = self.read_next(4)
         self.file_size_high = self.read_next(4)
         self.reserved = self.read_next(1)
-
         self.shadows_obj = self.read_next(4)
         self.is_shrink = self.read_next(4)
 
-        # Calculate file size
+        # Calculate file size from file_size_low and file_size_high.
+        # Both will be 0xFFFFFFFF if unused.
         if self.file_size_high != 0xFFFFFFFF:
             self.file_size = self.file_size_low | (self.file_size_high << 32)
         elif self.file_size_low != 0xFFFFFFFF:
@@ -341,6 +417,8 @@ class YAFFSEntry(YAFFS):
         else:
             self.file_size = 0
 
+        # Pass the spare data to YAFFSSpare for processing.
+        # Keep a copy of this object's ID, as parsed from the spare data, for convenience.
         self.spare = YAFFSSpare(spare, self.config)
         self.yaffs_obj_id = self.spare.obj_id
 
@@ -363,9 +441,12 @@ class YAFFSParser(YAFFS):
         return None
 
     def next_entry(self):
+        '''
+        Yields the next object in the YAFFS file system (instance of YAFFSEntry)
+        '''
         while self.offset < self.data_len:
             # Read and parse the object header data
-            (obj_hdr_data, obj_hdr_spare) = self.read_page()
+            (obj_hdr_data, obj_hdr_spare) = self.read_block()
             obj_hdr = YAFFSEntry(obj_hdr_data, obj_hdr_spare, self.config)
 
             # Sanity check the file name. This is done primarily for cases where there is trailing data
@@ -384,8 +465,12 @@ class YAFFSParser(YAFFS):
 
                 bytes_remaining = obj_hdr.file_size
 
+                # If a file ends in the middle of a page, which it most likely does,
+                # then the page is padded out with 0xFF. Thus, it is safe to read data
+                # one page at a time via self.read_block until all file data has been
+                # read.
                 while bytes_remaining:
-                    (data, spare) = self.read_page()
+                    (data, spare) = self.read_block()
                     if len(data) < bytes_remaining:
                         obj_hdr.file_data += data
                         bytes_remaining -= len(data)
@@ -401,14 +486,26 @@ class YAFFSExtractor(YAFFS):
     '''
 
     def __init__(self, data, config):
+        '''
+        data   - Raw string containing YAFFS file system data.
+                 Trailing data is usually OK, but the first byte
+                 in data must be the beginning of the file system.
+        config - An instance of YAFFSConfig.
+        '''
         self.file_paths = {}
         self.file_entries = {}
         self.data = data
         self.config = config
 
     def parse(self):
+        '''
+        Parses the YAFFS file system, builds directory structures and stores file info / data.
+        Must be called before all other methods in this class.
+        '''
         with YAFFSParser(self.data, self.config) as parser:
             for entry in parser.next_entry():
+
+                # Figure out the full path of this file entry
                 if Compat.has_key(self.file_paths, entry.parent_obj_id):
                     path = os.path.join(self.file_paths[entry.parent_obj_id], entry.name)
                 else:
@@ -417,6 +514,7 @@ class YAFFSExtractor(YAFFS):
                                                                                                                 entry.parent_obj_id))
                     path = entry.name
 
+                # Store full file paths and entry data for later use
                 self.file_paths[entry.yaffs_obj_id] = path
                 self.file_entries[entry.yaffs_obj_id] = entry
 
@@ -426,6 +524,9 @@ class YAFFSExtractor(YAFFS):
         return len(self.file_entries)
 
     def _print_entry(self, entry):
+        '''
+        Prints info about a specific file entry.
+        '''
         sys.stdout.write("###################################################\n")
         sys.stdout.write("File type: %s\n" % str(entry.yaffs_obj_type))
         sys.stdout.write("File ID: %d\n" % entry.yaffs_obj_id)
@@ -446,16 +547,25 @@ class YAFFSExtractor(YAFFS):
 
 
     def ls(self):
+        '''
+        List info for all files in self.file_entries.
+        '''
         for (entry_id, entry) in Compat.iterator(self.file_entries):
             self._print_entry(entry)
 
-    def set_mode_owner(self, file_path, entry):
+    def _set_mode_owner(self, file_path, entry):
+        '''
+        Conveniece wrapper for setting ownership and file permissions.
+        '''
         if self.config.preserve_mode:
             os.chmod(file_path, entry.yst_mode)
         if self.config.preserve_owner:
             os.chown(file_path, entry.yst_uid, entry.yst_gid)
 
     def extract(self, outdir):
+        '''
+        Creates the outdir directory and extracts all files there.
+        '''
         dir_count = 0
         file_count = 0
         link_count = 0
@@ -463,19 +573,19 @@ class YAFFSExtractor(YAFFS):
         # Make it a bytes array for Python3
         outdir = Compat.str2bytes(outdir)
 
-        # Create directories
+        # Create directories first, so that files can be written to them
         for (entry_id, file_path) in Compat.iterator(self.file_paths):
             entry = self.file_entries[entry_id]
             if file_path and int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_DIRECTORY:
                 try:
                     file_path = os.path.join(outdir, file_path)
                     os.makedirs(file_path)
-                    self.set_mode_owner(file_path, entry)
+                    self._set_mode_owner(file_path, entry)
                     dir_count += 1
                 except Exception as e:
                     sys.stderr.write("WARNING: Failed to create directory '%s': %s\n" % (file_path, str(e)))
 
-        # Create files
+        # Create files, including special device files
         for (entry_id, file_path) in Compat.iterator(self.file_paths):
             if file_path:
                 file_path = os.path.join(outdir, file_path)
@@ -484,7 +594,7 @@ class YAFFSExtractor(YAFFS):
                     try:
                         with open(file_path, 'wb') as fp:
                             fp.write(self.file_entries[entry_id].file_data)
-                        self.set_mode_owner(file_path, entry)
+                        self._set_mode_owner(file_path, entry)
                         file_count += 1
                     except Exception as e:
                         sys.stderr.write("WARNING: Failed to create file '%s': %s\n" % (file_path, str(e)))
@@ -602,6 +712,7 @@ if __name__ == "__main__":
 
     # Either auto-detect configuration settings, or use hard-coded defaults
     if auto_detect:
+        # First 10K of data should be more than enough to detect the YAFFS settings
         config = YAFFSConfig(auto=True, sample_data=data[0:10240], debug=debug)
     else:
         config = YAFFSConfig(debug=debug)
