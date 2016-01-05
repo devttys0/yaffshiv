@@ -607,6 +607,11 @@ class YAFFSExtractor(YAFFS):
         for (entry_id, file_path) in Compat.iterator(self.file_paths):
             entry = self.file_entries[entry_id]
             if file_path and int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_DIRECTORY:
+                # Check the file name for possible path traversal attacks
+                if b'..' in file_path:
+                    sys.stderr.write("Warning: Refusing to create directory '%s': possible path traversal\n" % file_path)
+                    continue
+
                 try:
                     file_path = os.path.join(outdir, file_path)
                     os.makedirs(file_path)
@@ -618,6 +623,11 @@ class YAFFSExtractor(YAFFS):
         # Create files, including special device files
         for (entry_id, file_path) in Compat.iterator(self.file_paths):
             if file_path:
+                # Check the file name for possible path traversal attacks
+                if b'..' in file_path:
+                    sys.stderr.write("Warning: Refusing to create file '%s': possible path traversal\n" % file_path)
+                    continue
+
                 file_path = os.path.join(outdir, file_path)
                 entry = self.file_entries[entry_id]
                 if int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_FILE:
@@ -641,6 +651,11 @@ class YAFFSExtractor(YAFFS):
             entry = self.file_entries[entry_id]
 
             if file_path:
+                # Check the file name for possible path traversal attacks
+                if b'..' in file_path:
+                    sys.stderr.write("Warning: Refusing to create link file '%s': possible path traversal\n" % file_path)
+                    continue
+
                 dst = os.path.join(outdir, file_path)
 
                 if int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_SYMLINK:
@@ -717,7 +732,7 @@ def main():
         sys.stderr.write("    -p, --page-size=<int>           YAFFS page size [default: 2048]\n")
         sys.stderr.write("    -s, --spare-size=<int>          YAFFS spare size [default: 64]\n")
         sys.stderr.write("    -e, --endianess=<big|little>    Set input file endianess [default: little]\n")
-        sys.stderr.write("    -n, --no-ecc                    Don't use the YAFFS oob scheme [default: True]\n")
+        sys.stderr.write("    -n, --no-ecc                    Don't use the YAFFS oob scheme [default: use the oob scheme]\n")
         sys.stderr.write("    -a, --auto                      Attempt to auto detect page size, spare size, ECC, and endianess settings [default: False]\n")
         sys.stderr.write("    -b, --brute-force               Attempt all combinations of page size, spare size, ECC, and endianess  [default: False]\n")
         sys.stderr.write("    -o, --ownership                 Preserve original ownership of extracted files [default: False]\n")
