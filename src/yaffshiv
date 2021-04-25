@@ -355,6 +355,12 @@ class YAFFSSpare(YAFFS):
         '''
         self.data = data
         self.config = config
+        self.has_packed_data = None
+        self.obj_id = None
+        self.chunk_id = None
+        self.parent_obj_id = None
+        self.obj_type = None
+        self.file_size = None
 
         # YAFFS images built without --yaffs-ecclayout have an extra two
         # bytes before the chunk ID. Possibly an unused CRC?
@@ -368,6 +374,16 @@ class YAFFSSpare(YAFFS):
 
         self.obj_id = self.read_next(4)
         self.chunk_id = self.read_next(4)
+        self.n_bytes = self.read_next(4)
+
+        if self.chunk_id & 0x80000000:
+            self.has_packed_data = True
+            self.obj_type = (self.obj_id >> 28).to_bytes(4, 'little')
+            self.obj_id = self.obj_id & ~(0x0f << 28)
+            self.parent_obj_id = self.chunk_id & 0x0FFFFFFF
+            self.chunk_id = 0
+            self.file_size = self.n_bytes
+
 
 class YAFFSEntry(YAFFS):
     '''
