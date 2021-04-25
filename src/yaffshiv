@@ -361,8 +361,8 @@ class YAFFSSpare(YAFFS):
         if not self.config.ecclayout:
             junk = self.read_next(2)
 
-        self.chunk_id = self.read_next(4)
         self.obj_id = self.read_next(4)
+        self.chunk_id = self.read_next(4)
 
 class YAFFSEntry(YAFFS):
     '''
