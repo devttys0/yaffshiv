@@ -361,6 +361,11 @@ class YAFFSSpare(YAFFS):
         if not self.config.ecclayout:
             junk = self.read_next(2)
 
+        self.sequence_id = self.read_next(4)
+
+        if self.sequence_id == b'\xff' * 4:
+            raise YAFFSException("Bad spare data")
+
         self.obj_id = self.read_next(4)
         self.chunk_id = self.read_next(4)
 
