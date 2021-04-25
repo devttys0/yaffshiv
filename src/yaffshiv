@@ -447,7 +447,7 @@ class YAFFSEntry(YAFFS):
         junk = self.read_next(4)
 
         # File mode and ownership info
-        self.yst_mode = self.read_next(4)
+        self.yst_mode = 0o7777 & self.read_next(4)
         self.yst_uid = self.read_next(4)
         self.yst_gid = self.read_next(4)
 
