@@ -650,8 +650,10 @@ class YAFFSExtractor(YAFFS):
                 else:
                     if entry.parent_obj_id != self.YAFFS_OBJECTID_ROOT:
                         self.dbg_write("Warning: File %s is the child of an unknown parent object [%d]!\n" % (entry.name,
-                                                                                                              entry.parent_obj_id))
-                    path = entry.name
+                                                                                                            entry.parent_obj_id))
+                        path = os.path.join(b"lost+found", entry.name)
+                    else:
+                        path = entry.name
 
                 # Store full file paths and entry data for later use
                 self.file_paths[entry.yaffs_obj_id] = path
