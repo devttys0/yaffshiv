@@ -515,14 +515,44 @@ class YAFFSParser(YAFFS):
     def __exit__(self, a, b, c):
         return None
 
+    class scanned_data():
+        def __init__(self):
+            self.entries = []
+            self.spares = {}
+        def append(self, data):
+            if type(data) is YAFFSEntry:
+                self.entries.append(data)
+            if type(data) is YAFFSSpare:
+                current = self.spares.get(data.obj_id, [])
+                current.append(data)
+                self.spares[data.obj_id] = current
+
+    def scan_fs(self):
+        self.scanned_data = self.scanned_data()
+        while self.offset < self.data_len:
+            spare = None
+            current_offset = self.offset
+            (obj_hdr_data, obj_hdr_spare) = self.read_block()
+            try:
+                obj_hdr = YAFFSEntry(obj_hdr_data, obj_hdr_spare, self.config)
+            except YAFFSException as e:
+                self.dbg_write("YAFFSException: {}\n".format(e))
+                obj_hdr = YAFFSSpare(obj_hdr_spare, self.config)
+            self.dbg_write("GOT OBJECT: {}\n".format(obj_hdr))
+            obj_hdr.data_offset = current_offset
+            self.scanned_data.append(obj_hdr)
+        self.dbg_write("FOUND {} FS objects\n".format(len(self.scanned_data.entries)))
+        self.offset = 0
+        return self.scanned_data
+
     def next_entry(self):
         '''
         Yields the next object in the YAFFS file system (instance of YAFFSEntry)
         '''
-        while self.offset < self.data_len:
-            # Read and parse the object header data
-            (obj_hdr_data, obj_hdr_spare) = self.read_block()
-            obj_hdr = YAFFSEntry(obj_hdr_data, obj_hdr_spare, self.config)
+        for entry in self.scanned_data.entries:
+            obj_hdr = entry
+            self.dbg_write("GOT OBJECT: {}\n".format(obj_hdr))
+            self.offset = obj_hdr.data_offset
 
             # Sanity check the file name. This is done primarily for cases where there is trailing data
             # at the end of the YAFFS file system, so if we're processing bogus data then the file name
@@ -579,6 +609,17 @@ class YAFFSExtractor(YAFFS):
         Must be called before all other methods in this class.
         '''
         with YAFFSParser(self.data, self.config) as parser:
+            parser.scan_fs()
+            self.dbg_write("Scanned data:\n")
+            for i in parser.scanned_data.entries:
+                self.dbg_write("sequence: {}, obj_id: {}, chunk_id: {}, n_bytes: {}, parent_obj_id: {}, obj_type: {}, name: {}\n".format(
+                i.spare.sequence_id, i.spare.obj_id, i.spare.chunk_id, i.file_size, i.parent_obj_id,
+                i.spare.obj_type, i.name))
+            for dummy in parser.scanned_data.spares.values():
+                for i in dummy:
+                    self.dbg_write("sequence: {}, obj_id: {}, chunk_id: {}, n_bytes: {}, parent_obj_id: {}, obj_type: {}\n".format(
+                    i.sequence_id, i.obj_id, i.chunk_id, i.n_bytes, i.parent_obj_id,
+                    i.obj_type))
             for entry in parser.next_entry():
 
                 # Figure out the full path of this file entry
