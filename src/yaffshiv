@@ -226,6 +226,12 @@ class YAFFS(object):
     YAFFS_OBJECT_TYPE_HARDLINK  = 4
     YAFFS_OBJECT_TYPE_SPECIAL   = 5
 
+    # Special parent IDs
+    YAFFS_OBJECTID_ROOT         = 1
+    YAFFS_OBJECTID_LOSTNFOUND   = 2
+    YAFFS_OBJECTID_UNLINKED     = 3
+    YAFFS_OBJECTID_DELETED      = 4
+
     # These must be overidden with valid data by any subclass wishing
     # to use the read_long, read_short, read_next or read_block methods.
     #
@@ -402,14 +408,36 @@ class YAFFSEntry(YAFFS):
         # This is filled in later, by YAFFSParser.next_entry
         self.file_data = b''
 
+        # Pass the spare data to YAFFSSpare for processing.
+        # Keep a copy of this object's ID, as parsed from the spare data, for convenience.
+        self.spare = YAFFSSpare(spare, self.config)
+        self.yaffs_obj_id = self.spare.obj_id
+
         # Read in the first four bytes, which are the object type ID,
         # and pass them to YAFFSObjType for processing.
         obj_type_raw = self.read_next(4, raw=True)
-        self.yaffs_obj_type = YAFFSObjType(obj_type_raw, self.config)
+        if self.spare.has_packed_data:
+            if self.spare.obj_type:
+                obj_type_raw = self.spare.obj_type
+            else:
+                raise YAFFSException("No obj_type in spare. Erased block, skipping!")
+        #else:
+        #    raise YAFFSException("No packet tags found! Erased block, skipping!")
 
+        if self.spare.chunk_id:
+            raise YAFFSException("DATA page, skipping!")
+
+        self.yaffs_obj_type = YAFFSObjType(obj_type_raw, self.config)
         # The object ID of this object's parent (e.g., the ID of the directory
         # that a file resides in).
         self.parent_obj_id = self.read_next(4)
+        if self.spare.has_packed_data and self.spare.parent_obj_id:
+            self.parent_obj_id = self.spare.parent_obj_id
+        if self.parent_obj_id in (0, self.YAFFS_OBJECTID_LOSTNFOUND,
+                                  self.YAFFS_OBJECTID_DELETED, self.YAFFS_OBJECTID_UNLINKED):
+            self.dbg_write("Found deleted object, skipping!\n")
+            raise YAFFSException("Found deleted object, skipping!")
+
 
         # File name and checksum (checksum no longer used in YAFFS)
         self.sum_no_longer_used = self.read_next(2)
@@ -466,10 +494,8 @@ class YAFFSEntry(YAFFS):
         else:
             self.file_size = 0
 
-        # Pass the spare data to YAFFSSpare for processing.
-        # Keep a copy of this object's ID, as parsed from the spare data, for convenience.
-        self.spare = YAFFSSpare(spare, self.config)
-        self.yaffs_obj_id = self.spare.obj_id
+        if self.spare.has_packed_data and self.spare.file_size:
+            self.file_size = self.spare.file_size
 
 class YAFFSParser(YAFFS):
     '''
