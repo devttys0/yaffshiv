@@ -648,7 +648,7 @@ class YAFFSExtractor(YAFFS):
                 if Compat.has_key(self.file_paths, entry.parent_obj_id):
                     path = os.path.join(self.file_paths[entry.parent_obj_id], entry.name)
                 else:
-                    if entry.parent_obj_id != 1:
+                    if entry.parent_obj_id != self.YAFFS_OBJECTID_ROOT:
                         self.dbg_write("Warning: File %s is the child of an unknown parent object [%d]!\n" % (entry.name,
                                                                                                               entry.parent_obj_id))
                     path = entry.name
