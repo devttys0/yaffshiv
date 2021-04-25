@@ -575,7 +575,25 @@ class YAFFSParser(YAFFS):
                 # then the page is padded out with 0xFF. Thus, it is safe to read data
                 # one page at a time via self.read_block until all file data has been
                 # read.
+                file_chunk_id = 1
                 while bytes_remaining:
+                    file_current_chunk = None
+                    file_seq = 0
+                    for en in self.scanned_data.spares.get(entry.yaffs_obj_id):
+                        if en.chunk_id == file_chunk_id and en.sequence_id >= file_seq:
+                            file_current_chunk = en
+                            file_seq = en.sequence_id
+                            self.dbg_write("Found candidate: \n")
+                            self.dbg_write("sequence: {}, obj_id: {}, chunk_id: {}, n_bytes: {}, parent_obj_id: {}, obj_type: {}, file_size: {}\n".format(
+                                en.sequence_id, en.obj_id, en.chunk_id, en.n_bytes, en.parent_obj_id,
+                                en.obj_type, en.file_size))
+                    if not file_current_chunk:
+                        self.dbg_write("DID NOT FUND CHUNK FOR {} Read: {}, remaining: {} !!!\n".format(
+                            entry.name, len(obj_hdr.file_data), bytes_remaining))
+                        break
+
+                    file_chunk_id += 1
+                    self.offset = file_current_chunk.data_offset
                     (data, spare) = self.read_block()
                     if len(data) < bytes_remaining:
                         obj_hdr.file_data += data
@@ -583,6 +601,10 @@ class YAFFSParser(YAFFS):
                     else:
                         obj_hdr.file_data += data[0:bytes_remaining]
                         bytes_remaining = 0
+
+            if obj_hdr.file_size > 0 and bytes_remaining:
+                print("Not all chunks found for {}, skipping".format(obj_hdr.name))
+                continue
 
             yield obj_hdr
 
