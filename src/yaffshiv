@@ -521,11 +521,20 @@ class YAFFSParser(YAFFS):
             self.spares = {}
         def append(self, data):
             if type(data) is YAFFSEntry:
+                for entry in self.entries:
+                    if data.yaffs_obj_id == entry.yaffs_obj_id and \
+                        data.spare.sequence_id >= entry.spare.sequence_id:
+                            self.entries.remove(entry)
                 self.entries.append(data)
             if type(data) is YAFFSSpare:
                 current = self.spares.get(data.obj_id, [])
                 current.append(data)
                 self.spares[data.obj_id] = current
+
+        def sort_entries(self):
+            self.entries.sort(
+                key=lambda x: x.parent_obj_id if int(x.yaffs_obj_type) == YAFFS.YAFFS_OBJECT_TYPE_DIRECTORY else x.yaffs_obj_id
+                )
 
     def scan_fs(self):
         self.scanned_data = self.scanned_data()
@@ -541,6 +550,7 @@ class YAFFSParser(YAFFS):
             self.dbg_write("GOT OBJECT: {}\n".format(obj_hdr))
             obj_hdr.data_offset = current_offset
             self.scanned_data.append(obj_hdr)
+        self.scanned_data.sort_entries()
         self.dbg_write("FOUND {} FS objects\n".format(len(self.scanned_data.entries)))
         self.offset = 0
         return self.scanned_data
