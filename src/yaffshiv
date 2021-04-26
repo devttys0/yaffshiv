@@ -887,7 +887,7 @@ def main():
         elif opt in ["-p", "--page-size"]:
             page_size = int(arg)
         elif opt in ["-o", "--ownership"]:
-            preserve_ownership = True
+            preserve_owner = True
         elif opt in ["-D", "--debug"]:
             debug = True
 
