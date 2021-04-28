@@ -410,7 +410,10 @@ class YAFFSEntry(YAFFS):
 
         # Pass the spare data to YAFFSSpare for processing.
         # Keep a copy of this object's ID, as parsed from the spare data, for convenience.
-        self.spare = YAFFSSpare(spare, self.config)
+        try:
+            self.spare = YAFFSSpare(spare, self.config)
+        except YAFFSException as e:
+            raise e
         self.yaffs_obj_id = self.spare.obj_id
 
         # Read in the first four bytes, which are the object type ID,
@@ -540,13 +543,19 @@ class YAFFSParser(YAFFS):
         self.scanned_data = self.scanned_data()
         while self.offset < self.data_len:
             spare = None
+            obj_hdr = None
             current_offset = self.offset
             (obj_hdr_data, obj_hdr_spare) = self.read_block()
             try:
                 obj_hdr = YAFFSEntry(obj_hdr_data, obj_hdr_spare, self.config)
             except YAFFSException as e:
                 self.dbg_write("YAFFSException: {}\n".format(e))
-                obj_hdr = YAFFSSpare(obj_hdr_spare, self.config)
+            if not obj_hdr:
+                try:
+                    obj_hdr = YAFFSSpare(obj_hdr_spare, self.config)
+                except YAFFSException as e:
+                    self.dbg_write("YAFFSException: {}\n".format(e))
+                    continue
             self.dbg_write("GOT OBJECT: {}\n".format(obj_hdr))
             obj_hdr.data_offset = current_offset
             self.scanned_data.append(obj_hdr)
