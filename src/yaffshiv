@@ -375,7 +375,7 @@ class YAFFSSpare(YAFFS):
 
         self.sequence_id = self.read_next(4)
 
-        if self.sequence_id == b'\xff' * 4:
+        if self.sequence_id == 0xFFFFFFFF:
             raise YAFFSException("Bad spare data")
 
         self.obj_id = self.read_next(4)
