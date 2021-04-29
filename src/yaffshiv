@@ -384,7 +384,7 @@ class YAFFSSpare(YAFFS):
 
         if self.chunk_id & 0x80000000:
             self.has_packed_data = True
-            self.obj_type = (self.obj_id >> 28).to_bytes(4, 'little')
+            self.obj_type = struct.pack("<I", self.obj_id >> 28)
             self.obj_id = self.obj_id & ~(0x0f << 28)
             self.parent_obj_id = self.chunk_id & 0x0FFFFFFF
             self.chunk_id = 0
