@@ -5,6 +5,11 @@ import sys
 import struct
 import string
 
+def is_safe_path(basedir, path):
+    matchpath = os.path.realpath(path)
+    return basedir == os.path.commonpath((basedir, matchpath))
+
+
 class Compat(object):
     '''
     Python2/3 compatability methods.
@@ -607,13 +612,14 @@ class YAFFSExtractor(YAFFS):
         for (entry_id, file_path) in Compat.iterator(self.file_paths):
             entry = self.file_entries[entry_id]
             if file_path and int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_DIRECTORY:
+                file_path = os.path.join(outdir, file_path)
+
                 # Check the file name for possible path traversal attacks
-                if b'..' in file_path:
+                if not is_safe_path(outdir, file_path):
                     sys.stderr.write("Warning: Refusing to create directory '%s': possible path traversal\n" % file_path)
                     continue
 
                 try:
-                    file_path = os.path.join(outdir, file_path)
                     os.makedirs(file_path)
                     self._set_mode_owner(file_path, entry)
                     dir_count += 1
@@ -623,12 +629,13 @@ class YAFFSExtractor(YAFFS):
         # Create files, including special device files
         for (entry_id, file_path) in Compat.iterator(self.file_paths):
             if file_path:
+                file_path = os.path.join(outdir, file_path)
+
                 # Check the file name for possible path traversal attacks
-                if b'..' in file_path:
+                if not is_safe_path(outdir, file_path):
                     sys.stderr.write("Warning: Refusing to create file '%s': possible path traversal\n" % file_path)
                     continue
 
-                file_path = os.path.join(outdir, file_path)
                 entry = self.file_entries[entry_id]
                 if int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_FILE:
                     try:
@@ -651,12 +658,11 @@ class YAFFSExtractor(YAFFS):
             entry = self.file_entries[entry_id]
 
             if file_path:
+                dst = os.path.join(outdir, file_path)
                 # Check the file name for possible path traversal attacks
-                if b'..' in file_path:
+                if not is_safe_path(outdir, dst):
                     sys.stderr.write("Warning: Refusing to create link file '%s': possible path traversal\n" % file_path)
                     continue
-
-                dst = os.path.join(outdir, file_path)
 
                 if int(entry.yaffs_obj_type) == self.YAFFS_OBJECT_TYPE_SYMLINK:
                     src = entry.alias
