@@ -844,17 +844,17 @@ def main():
     config = None
 
     try:
-        (opts, args) = getopt(sys.argv[1:], "f:d:p:s:e:c:oaDlb", ["file=",
-                                                                  "dir=",
-                                                                  "page-size=",
-                                                                  "spare-size=",
-                                                                  "endianess=",
-                                                                  "no-ecc",
-                                                                  "ownership",
-                                                                  "debug",
-                                                                  "ls",
-                                                                  "brute-force",
-                                                                  "auto"])
+        (opts, args) = getopt(sys.argv[1:], "f:d:p:s:e:noaDlb", ["file=",
+                                                                 "dir=",
+                                                                 "page-size=",
+                                                                 "spare-size=",
+                                                                 "endianess=",
+                                                                 "no-ecc",
+                                                                 "ownership",
+                                                                 "debug",
+                                                                 "ls",
+                                                                 "brute-force",
+                                                                 "auto"])
     except GetoptError as e:
         sys.stderr.write(str(e) + "\n")
         sys.stderr.write("\nUsage: %s [OPTIONS]\n\n" % sys.argv[0])
