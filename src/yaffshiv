@@ -560,7 +560,9 @@ class YAFFSParser(YAFFS):
                     obj_hdr = YAFFSSpare(obj_hdr_spare, self.config)
                 except YAFFSException as e:
                     self.dbg_write("YAFFSException: {}\n".format(e))
-                    continue
+                    # Could not parse block as data or spare entry
+                    # assume invalid or trailing data
+                    break
             self.dbg_write("GOT OBJECT: {}\n".format(obj_hdr))
             obj_hdr.data_offset = current_offset
             self.scanned_data.append(obj_hdr)
@@ -948,10 +950,12 @@ def main():
     # Try auto-detected / manual / default settings first.
     # If those work without errors, then assume they are correct.
     fs = YAFFSExtractor(data, config)
-    # If there were errors in parse_yaffs, and brute forcing is enabled, loop
-    # through all possible configuration combinations looking for the one
-    # combination that produces the most successfully parsed object entries.
-    if not parse_yaffs(fs) and brute_force:
+    parse_yaffs(fs)
+
+    # If there brute forcing is enabled, loop through all possible configuration
+    # combinations looking for the one combination that produces the most successfully
+    # parsed object entries. Parsing may return 0 entries even for invalid settings.
+    if brute_force:
         for endianess in [YAFFS.LITTLE_ENDIAN, YAFFS.BIG_ENDIAN]:
             for ecclayout in [True, False]:
                 for page_size in YAFFS.PAGE_SIZES:
